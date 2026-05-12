@@ -44,14 +44,75 @@ function destinationPoint(
   return [toDegrees(lng2), toDegrees(lat2)];
 }
 
-function getFallbackOutAndBackCourse(origin: LngLat): Course {
+function createDenseFallbackOutAndBackCourse(origin: LngLat): Course {
   const turnaround = destinationPoint(origin, 500, 90);
+  const outboundPoints = 18;
+  const coordinates: LngLat[] = [];
+
+  for (let i = 0; i <= outboundPoints; i += 1) {
+    const ratio = i / outboundPoints;
+    coordinates.push([
+      origin[0] + (turnaround[0] - origin[0]) * ratio,
+      origin[1] + (turnaround[1] - origin[1]) * ratio,
+    ]);
+  }
+
+  for (let i = outboundPoints - 1; i >= 0; i -= 1) {
+    const ratio = i / outboundPoints;
+    coordinates.push([
+      origin[0] + (turnaround[0] - origin[0]) * ratio,
+      origin[1] + (turnaround[1] - origin[1]) * ratio,
+    ]);
+  }
 
   return {
     id: `local-fallback-${Date.now()}`,
-    name: "Current Location 1K Test",
+    name: "현재 위치 1K 테스트 코스",
     distanceM: 1000,
-    polyline: [origin, turnaround, origin],
+    polyline: coordinates,
+  };
+}
+
+async function fetchWalkingRoute(params: {
+  origin: LngLat;
+  destination: LngLat;
+  token: string;
+}): Promise<{ coordinates: LngLat[]; distanceM: number } | null> {
+  const { origin, destination, token } = params;
+
+  const coordinateString = [origin, destination]
+    .map(([lng, lat]) => `${lng},${lat}`)
+    .join(";");
+
+  const url =
+    `https://api.mapbox.com/directions/v5/mapbox/walking/${coordinateString}` +
+    `?geometries=geojson&overview=full&steps=false&access_token=${token}`;
+
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    console.warn("Mapbox Directions failed:", await response.text());
+    return null;
+  }
+
+  const data = await response.json();
+  const route = data.routes?.[0];
+
+  if (!route?.geometry?.coordinates || !Array.isArray(route.geometry.coordinates)) {
+    console.warn("Mapbox Directions returned invalid geometry:", data);
+    return null;
+  }
+
+  const coordinates = route.geometry.coordinates as LngLat[];
+  const distanceM = Number(route.distance);
+
+  if (coordinates.length < 2 || !Number.isFinite(distanceM) || distanceM <= 0) {
+    return null;
+  }
+
+  return {
+    coordinates,
+    distanceM,
   };
 }
 
@@ -63,40 +124,38 @@ export async function generateLocalOutAndBackCourse(params: {
   const { origin, token, targetDistanceM = 1000 } = params;
 
   const halfDistanceM = targetDistanceM / 2;
-  const turnaround = destinationPoint(origin, halfDistanceM, 90);
 
-  const coordinateString = [origin, turnaround, origin]
-    .map(([lng, lat]) => `${lng},${lat}`)
-    .join(";");
+  const candidateBearings = [90, 0, 180, 270];
 
-  const url =
-    `https://api.mapbox.com/directions/v5/mapbox/walking/${coordinateString}` +
-    `?geometries=geojson&overview=full&steps=false&access_token=${token}`;
+  for (const bearing of candidateBearings) {
+    try {
+      const destination = destinationPoint(origin, halfDistanceM, bearing);
 
-  try {
-    const response = await fetch(url);
+      const outboundRoute = await fetchWalkingRoute({
+        origin,
+        destination,
+        token,
+      });
 
-    if (!response.ok) {
-      console.warn("Mapbox Directions failed:", await response.text());
-      return getFallbackOutAndBackCourse(origin);
+      if (!outboundRoute) continue;
+
+      const outbound = outboundRoute.coordinates;
+      const inbound = outbound.slice(0, -1).reverse();
+
+      const polyline = [...outbound, ...inbound];
+
+      if (polyline.length < 3) continue;
+
+      return {
+        id: `local-directions-${Date.now()}`,
+        name: "현재 위치 1K 테스트 코스",
+        distanceM: Math.round(outboundRoute.distanceM * 2),
+        polyline,
+      };
+    } catch (error) {
+      console.warn("Failed bearing candidate:", bearing, error);
     }
-
-    const data = await response.json();
-    const route = data.routes?.[0];
-
-    if (!route?.geometry?.coordinates || !Array.isArray(route.geometry.coordinates)) {
-      console.warn("Mapbox Directions returned invalid geometry:", data);
-      return getFallbackOutAndBackCourse(origin);
-    }
-
-    return {
-      id: `local-directions-${Date.now()}`,
-      name: "Current Location 1K Test",
-      distanceM: Math.round(route.distance ?? targetDistanceM),
-      polyline: route.geometry.coordinates as LngLat[],
-    };
-  } catch (error) {
-    console.warn("Failed to generate local course:", error);
-    return getFallbackOutAndBackCourse(origin);
   }
+
+  return createDenseFallbackOutAndBackCourse(origin);
 }
