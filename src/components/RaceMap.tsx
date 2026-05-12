@@ -3,6 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
 import { HAN_RIVER_YEOUIDO_5K } from "@/lib/courses/hanRiver";
+import {
+  generateLocalOutAndBackCourse,
+  type Course,
+  type LngLat,
+} from "@/lib/courses/generateLocalCourse";
 import { useGpsTracker, type LatestGpsProjection } from "@/lib/gps/useGpsTracker";
 import { DEFAULT_BOTS } from "@/lib/race/bots";
 import { clampPaceSecPerKm, formatPace, paceToSpeedMps } from "@/lib/race/pace";
@@ -25,6 +30,13 @@ type RunnerHudState = {
 };
 
 const INITIAL_SELECTED_BOT_IDS = ["bot_600", "bot_500", "bot_400"];
+
+const DEFAULT_COURSE: Course = {
+  id: HAN_RIVER_YEOUIDO_5K.id,
+  name: HAN_RIVER_YEOUIDO_5K.name,
+  distanceM: HAN_RIVER_YEOUIDO_5K.distanceM,
+  polyline: HAN_RIVER_YEOUIDO_5K.polyline,
+};
 
 function parsePaceInput(input: string): number {
   const trimmed = input.trim();
@@ -99,10 +111,43 @@ function getGpsStatusLabel(status: string): string {
   return status;
 }
 
+function getPositionErrorMessage(error: GeolocationPositionError): string {
+  if (error.code === error.PERMISSION_DENIED) {
+    return "위치 권한이 거부되었습니다.";
+  }
+
+  if (error.code === error.POSITION_UNAVAILABLE) {
+    return "현재 위치를 가져올 수 없습니다.";
+  }
+
+  if (error.code === error.TIMEOUT) {
+    return "현재 위치 요청 시간이 초과되었습니다.";
+  }
+
+  return error.message || "현재 위치를 가져오지 못했습니다.";
+}
+
+function getCurrentPosition(): Promise<GeolocationPosition> {
+  return new Promise((resolve, reject) => {
+    if (!("geolocation" in navigator)) {
+      reject(new Error("이 브라우저는 Geolocation API를 지원하지 않습니다."));
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(resolve, reject, {
+      enableHighAccuracy: true,
+      maximumAge: 0,
+      timeout: 15_000,
+    });
+  });
+}
+
 export default function RaceMap() {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
 
+  const startMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const finishMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const playerMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const botMarkerRefs = useRef<Record<string, mapboxgl.Marker>>({});
 
@@ -113,10 +158,14 @@ export default function RaceMap() {
   const [activePanel, setActivePanel] = useState<ActivePanel>("setup");
   const [isLeaderboardOpen, setIsLeaderboardOpen] = useState(true);
 
+  const [activeCourse, setActiveCourse] = useState<Course>(DEFAULT_COURSE);
+
   const [status, setStatus] = useState("지도 초기화 중...");
   const [error, setError] = useState<string | null>(null);
+  const [gpsActionError, setGpsActionError] = useState<string | null>(null);
 
   const [isMapLoaded, setIsMapLoaded] = useState(false);
+  const [isGeneratingCourse, setIsGeneratingCourse] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [startTimeMs, setStartTimeMs] = useState<number | null>(null);
   const [elapsedSec, setElapsedSec] = useState(0);
@@ -134,11 +183,11 @@ export default function RaceMap() {
     boolean | null
   >(null);
 
-  const gpsTracker = useGpsTracker(HAN_RIVER_YEOUIDO_5K.polyline);
+  const gpsTracker = useGpsTracker(activeCourse.polyline);
 
   const courseLengthM = useMemo(() => {
-    return getPolylineLengthM(HAN_RIVER_YEOUIDO_5K.polyline);
-  }, []);
+    return getPolylineLengthM(activeCourse.polyline);
+  }, [activeCourse]);
 
   const playerPaceSecPerKm = useMemo(() => {
     return parsePaceInput(paceInput);
@@ -169,6 +218,91 @@ export default function RaceMap() {
         finished: false,
       })),
     ];
+  }
+
+  function fitMapToCourse(course: Course) {
+    const map = mapRef.current;
+    if (!map || course.polyline.length === 0) return;
+
+    const bounds = new mapboxgl.LngLatBounds();
+    course.polyline.forEach((coord) => bounds.extend(coord));
+
+    map.fitBounds(bounds, {
+      padding: 80,
+      duration: 800,
+    });
+  }
+
+  function updateCourseSource(course: Course) {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const source = map.getSource("race-course") as
+      | mapboxgl.GeoJSONSource
+      | undefined;
+
+    const data: GeoJSON.Feature<GeoJSON.LineString> = {
+      type: "Feature",
+      properties: {},
+      geometry: {
+        type: "LineString",
+        coordinates: course.polyline,
+      },
+    };
+
+    if (source) {
+      source.setData(data);
+      return;
+    }
+
+    map.addSource("race-course", {
+      type: "geojson",
+      data,
+    });
+
+    map.addLayer({
+      id: "race-course-line",
+      type: "line",
+      source: "race-course",
+      layout: {
+        "line-join": "round",
+        "line-cap": "round",
+      },
+      paint: {
+        "line-width": 5,
+        "line-color": "#2563eb",
+      },
+    });
+  }
+
+  function resetMarkersToCourseStart(course: Course = activeCourse) {
+    const start = course.polyline[0];
+    const finish = course.polyline[course.polyline.length - 1];
+
+    if (!start || !finish) return;
+
+    startMarkerRef.current?.setLngLat(start);
+    finishMarkerRef.current?.setLngLat(finish);
+    playerMarkerRef.current?.setLngLat(start);
+
+    DEFAULT_BOTS.forEach((bot) => {
+      const marker = botMarkerRefs.current[bot.id];
+      if (marker) {
+        marker.setLngLat(start);
+      }
+    });
+  }
+
+  function applyCourse(course: Course) {
+    setActiveCourse(course);
+    updateCourseSource(course);
+    resetMarkersToCourseStart(course);
+    fitMapToCourse(course);
+    setRunnerHud(createInitialHud());
+    setElapsedSec(0);
+    setStartTimeMs(null);
+    latestGpsProjectionRef.current = null;
+    setStatus(`${course.name} 코스 적용 완료`);
   }
 
   useEffect(() => {
@@ -221,54 +355,20 @@ export default function RaceMap() {
       setStatus("지도 로딩 완료");
       setIsMapLoaded(true);
 
-      map.addSource("han-river-course", {
-        type: "geojson",
-        data: {
-          type: "Feature",
-          properties: {},
-          geometry: {
-            type: "LineString",
-            coordinates: HAN_RIVER_YEOUIDO_5K.polyline,
-          },
-        },
-      });
+      updateCourseSource(activeCourse);
 
-      map.addLayer({
-        id: "han-river-course-line",
-        type: "line",
-        source: "han-river-course",
-        layout: {
-          "line-join": "round",
-          "line-cap": "round",
-        },
-        paint: {
-          "line-width": 5,
-          "line-color": "#2563eb",
-        },
-      });
+      const start = activeCourse.polyline[0];
+      const finish = activeCourse.polyline[activeCourse.polyline.length - 1];
 
-      const start = HAN_RIVER_YEOUIDO_5K.polyline[0];
-      const finish =
-        HAN_RIVER_YEOUIDO_5K.polyline[
-          HAN_RIVER_YEOUIDO_5K.polyline.length - 1
-        ];
-
-      new mapboxgl.Marker({ color: "#16a34a" })
+      startMarkerRef.current = new mapboxgl.Marker({ color: "#16a34a" })
         .setLngLat(start)
         .setPopup(new mapboxgl.Popup().setText("Start"))
         .addTo(map);
 
-      new mapboxgl.Marker({ color: "#dc2626" })
+      finishMarkerRef.current = new mapboxgl.Marker({ color: "#dc2626" })
         .setLngLat(finish)
         .setPopup(new mapboxgl.Popup().setText("Finish"))
         .addTo(map);
-
-      const bounds = new mapboxgl.LngLatBounds();
-      HAN_RIVER_YEOUIDO_5K.polyline.forEach((coord) => bounds.extend(coord));
-      map.fitBounds(bounds, {
-        padding: 80,
-        duration: 800,
-      });
 
       playerMarkerRef.current = new mapboxgl.Marker({
         element: createRunnerMarkerElement("You", "🏃", "#16a34a"),
@@ -298,6 +398,7 @@ export default function RaceMap() {
         botMarkerRefs.current[bot.id] = marker;
       });
 
+      fitMapToCourse(activeCourse);
       setRunnerHud(createInitialHud());
     });
 
@@ -315,6 +416,12 @@ export default function RaceMap() {
 
       gpsTracker.stop();
 
+      startMarkerRef.current?.remove();
+      startMarkerRef.current = null;
+
+      finishMarkerRef.current?.remove();
+      finishMarkerRef.current = null;
+
       playerMarkerRef.current?.remove();
       playerMarkerRef.current = null;
 
@@ -324,7 +431,7 @@ export default function RaceMap() {
       map.remove();
       mapRef.current = null;
     };
-    // 최초 지도 생성용 effect이므로 의존성 고정
+    // 최초 지도 생성용 effect
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -373,7 +480,7 @@ export default function RaceMap() {
       const nextElapsedSec = (now - startTimeMs) / 1000;
 
       let playerDistanceM = 0;
-      let playerLngLat = getLngLatAtDistance(HAN_RIVER_YEOUIDO_5K.polyline, 0);
+      let playerLngLat = getLngLatAtDistance(activeCourse.polyline, 0);
       let playerHudPaceSecPerKm = playerPaceSecPerKm;
 
       if (playerMode === "pace") {
@@ -382,10 +489,7 @@ export default function RaceMap() {
           playerSpeedMps * nextElapsedSec,
           courseLengthM
         );
-        playerLngLat = getLngLatAtDistance(
-          HAN_RIVER_YEOUIDO_5K.polyline,
-          playerDistanceM
-        );
+        playerLngLat = getLngLatAtDistance(activeCourse.polyline, playerDistanceM);
       } else {
         const projection = latestGpsProjectionRef.current;
 
@@ -419,10 +523,7 @@ export default function RaceMap() {
         const speedMps = paceToSpeedMps(bot.paceSecPerKm);
         const rawDistanceM = speedMps * nextElapsedSec;
         const distanceM = Math.min(rawDistanceM, courseLengthM);
-        const currentLngLat = getLngLatAtDistance(
-          HAN_RIVER_YEOUIDO_5K.polyline,
-          distanceM
-        );
+        const currentLngLat = getLngLatAtDistance(activeCourse.polyline, distanceM);
 
         const marker = botMarkerRefs.current[bot.id];
         if (marker) {
@@ -475,20 +576,8 @@ export default function RaceMap() {
     playerMode,
     selectedBots,
     gpsTracker.stop,
+    activeCourse,
   ]);
-
-  function resetMarkersToStart() {
-    const start = HAN_RIVER_YEOUIDO_5K.polyline[0];
-
-    playerMarkerRef.current?.setLngLat(start);
-
-    DEFAULT_BOTS.forEach((bot) => {
-      const marker = botMarkerRefs.current[bot.id];
-      if (marker) {
-        marker.setLngLat(start);
-      }
-    });
-  }
 
   function handleToggleBot(botId: string) {
     if (isRunning) return;
@@ -502,6 +591,88 @@ export default function RaceMap() {
     });
   }
 
+  async function handleGenerateCourseFromCurrentLocation() {
+    if (isRunning) return;
+
+    setGpsActionError(null);
+
+    if (isSecureContextState === false) {
+      setGpsActionError("현재 위치 기반 코스 생성은 HTTPS 환경에서 테스트해야 합니다.");
+      return;
+    }
+
+    const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+
+    if (!token) {
+      setGpsActionError("Mapbox token이 없습니다.");
+      return;
+    }
+
+    try {
+      setIsGeneratingCourse(true);
+      setStatus("현재 위치를 가져오는 중...");
+
+      const position = await getCurrentPosition();
+
+      const accuracy = position.coords.accuracy;
+
+      if (accuracy > 80) {
+        setGpsActionError(
+          `현재 위치 정확도가 낮습니다. accuracy=${accuracy.toFixed(
+            1
+          )}m. 야외에서 다시 시도하세요.`
+        );
+        setStatus("현재 위치 정확도 부족");
+        return;
+      }
+
+      const origin: LngLat = [
+        position.coords.longitude,
+        position.coords.latitude,
+      ];
+
+      playerMarkerRef.current?.setLngLat(origin);
+
+      setStatus("현재 위치 기준 코스를 생성하는 중...");
+
+      const nextCourse = await generateLocalOutAndBackCourse({
+        origin,
+        token,
+        targetDistanceM: 1000,
+      });
+
+      gpsTracker.stop();
+      latestGpsProjectionRef.current = null;
+
+      setPlayerMode("gps");
+      applyCourse(nextCourse);
+      setGpsActionError(null);
+      setStatus("현재 위치 기준 1K 코스 생성 완료");
+    } catch (rawError) {
+      const message =
+        rawError instanceof GeolocationPositionError
+          ? getPositionErrorMessage(rawError)
+          : rawError instanceof Error
+            ? rawError.message
+            : "현재 위치 기반 코스를 생성하지 못했습니다.";
+
+      setGpsActionError(message);
+      setStatus("현재 위치 기반 코스 생성 실패");
+    } finally {
+      setIsGeneratingCourse(false);
+    }
+  }
+
+  function handleRestoreDefaultCourse() {
+    if (isRunning) return;
+
+    gpsTracker.stop();
+    latestGpsProjectionRef.current = null;
+    setPlayerMode("pace");
+    applyCourse(DEFAULT_COURSE);
+    setGpsActionError(null);
+  }
+
   function handleStartRace() {
     if (!isMapLoaded) return;
 
@@ -511,7 +682,7 @@ export default function RaceMap() {
       return;
     }
 
-    resetMarkersToStart();
+    resetMarkersToCourseStart(activeCourse);
 
     if (playerMode === "gps") {
       gpsTracker.reset();
@@ -539,7 +710,7 @@ export default function RaceMap() {
     gpsTracker.stop();
     latestGpsProjectionRef.current = null;
 
-    resetMarkersToStart();
+    resetMarkersToCourseStart(activeCourse);
 
     setIsRunning(false);
     setStartTimeMs(null);
@@ -618,6 +789,47 @@ export default function RaceMap() {
                   PaceRace
                 </div>
                 <div className="text-xs text-slate-500">{status}</div>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-white p-3">
+                <div className="mb-2 text-sm font-semibold text-slate-900">
+                  코스
+                </div>
+
+                <div className="rounded-lg bg-slate-50 p-2 text-xs text-slate-700">
+                  <div className="font-semibold text-slate-900">
+                    {activeCourse.name}
+                  </div>
+                  <div>길이: {(courseLengthM / 1000).toFixed(2)} km</div>
+                </div>
+
+                <div className="mt-3 grid grid-cols-1 gap-2">
+                  <button
+                    type="button"
+                    onClick={handleGenerateCourseFromCurrentLocation}
+                    disabled={isRunning || isGeneratingCourse}
+                    className="rounded-lg bg-orange-600 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    {isGeneratingCourse
+                      ? "현재 위치 코스 생성 중..."
+                      : "현재 위치 기준 1K 코스 생성"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleRestoreDefaultCourse}
+                    disabled={isRunning || activeCourse.id === DEFAULT_COURSE.id}
+                    className="rounded-lg bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    여의도 한강 5K로 복구
+                  </button>
+                </div>
+
+                {gpsActionError && (
+                  <div className="mt-2 rounded-lg bg-red-50 p-2 text-xs text-red-700">
+                    {gpsActionError}
+                  </div>
+                )}
               </div>
 
               <div className="rounded-xl border border-slate-200 bg-white p-3">
@@ -732,8 +944,8 @@ export default function RaceMap() {
                   )}
 
                   <div className="mt-2 text-[11px] text-orange-800">
-                    야외 테스트는 HTTPS 배포 주소에서, 코스 시작점 근처에서
-                    하는 것이 가장 안정적입니다.
+                    먼저 현재 위치 기준 코스를 생성한 뒤 Start Race를 누르는
+                    것이 좋습니다.
                   </div>
                 </div>
               )}
@@ -867,7 +1079,8 @@ export default function RaceMap() {
           {isLeaderboardOpen && (
             <>
               <div className="mt-2 text-xs text-slate-500">
-                Course length: {(courseLengthM / 1000).toFixed(2)} km
+                Course: {activeCourse.name} · length:{" "}
+                {(courseLengthM / 1000).toFixed(2)} km
               </div>
 
               <div className="race-runner-list mt-2 space-y-2 overflow-y-auto">
