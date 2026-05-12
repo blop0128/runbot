@@ -19,7 +19,15 @@ import {
 
 type PlayerMode = "pace" | "gps";
 type ActivePanel = "setup" | "map";
+type SetupView = "main" | "myCourses";
 type CustomPointStep = "start" | "turnaround" | "finish";
+type CustomGuide =
+  | "select-start"
+  | "add-turnaround"
+  | "select-turnaround"
+  | "select-finish"
+  | "build-course"
+  | null;
 
 type RunnerHudState = {
   id: string;
@@ -37,7 +45,16 @@ type CustomCoursePoints = {
   finish: LngLat | null;
 };
 
+type SavedCourseRecord = Course & {
+  savedId: string;
+  favorite: boolean;
+  order: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
 const INITIAL_SELECTED_BOT_IDS = ["bot_600", "bot_500", "bot_400"];
+const SAVED_COURSES_STORAGE_KEY = "runbot:savedCourses:v1";
 
 const DEFAULT_COURSE: Course = {
   id: HAN_RIVER_YEOUIDO_5K.id,
@@ -201,6 +218,30 @@ function getNextRequiredStep(points: CustomCoursePoints): CustomPointStep {
   return "finish";
 }
 
+function getCustomGuideText(guide: CustomGuide): string {
+  if (guide === "select-start") {
+    return "지도를 눌러 시작점을 선택하십시오.";
+  }
+
+  if (guide === "add-turnaround") {
+    return "반환점을 추가하려면 반환점 추가 버튼을 누르십시오.";
+  }
+
+  if (guide === "select-turnaround") {
+    return "지도를 눌러 반환점을 선택하십시오.";
+  }
+
+  if (guide === "select-finish") {
+    return "지도를 눌러 종료 지점을 선택하십시오.";
+  }
+
+  if (guide === "build-course") {
+    return "코스 생성 버튼을 눌러 코스를 생성하십시오.";
+  }
+
+  return "";
+}
+
 function createCustomPointMarkerElement(type: CustomPointStep) {
   const wrapper = document.createElement("div");
   wrapper.style.display = "flex";
@@ -240,6 +281,63 @@ function createCustomPointMarkerElement(type: CustomPointStep) {
   return wrapper;
 }
 
+function getSortedSavedCourses(courses: SavedCourseRecord[]): SavedCourseRecord[] {
+  return [...courses].sort((a, b) => {
+    if (a.favorite !== b.favorite) {
+      return a.favorite ? -1 : 1;
+    }
+
+    if (a.order !== b.order) {
+      return a.order - b.order;
+    }
+
+    return b.createdAt - a.createdAt;
+  });
+}
+
+function validateSavedCourseRecord(value: unknown): SavedCourseRecord | null {
+  if (typeof value !== "object" || value === null) return null;
+
+  const record = value as Partial<SavedCourseRecord>;
+
+  if (
+    typeof record.savedId !== "string" ||
+    typeof record.id !== "string" ||
+    typeof record.name !== "string" ||
+    typeof record.distanceM !== "number" ||
+    !Array.isArray(record.polyline)
+  ) {
+    return null;
+  }
+
+  const validPolyline = record.polyline.every((point) => {
+    return (
+      Array.isArray(point) &&
+      point.length === 2 &&
+      typeof point[0] === "number" &&
+      typeof point[1] === "number" &&
+      Number.isFinite(point[0]) &&
+      Number.isFinite(point[1])
+    );
+  });
+
+  if (!validPolyline) return null;
+
+  return {
+    savedId: record.savedId,
+    id: record.id,
+    name: record.name,
+    distanceM: record.distanceM,
+    polyline: record.polyline as LngLat[],
+    favorite: Boolean(record.favorite),
+    order: typeof record.order === "number" ? record.order : 0,
+    createdAt:
+      typeof record.createdAt === "number" ? record.createdAt : Date.now(),
+    updatedAt:
+      typeof record.updatedAt === "number" ? record.updatedAt : Date.now(),
+  };
+}
+
 export default function RaceMap() {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -257,9 +355,12 @@ export default function RaceMap() {
   const latestGpsProjectionRef = useRef<LatestGpsProjection | null>(null);
 
   const [activePanel, setActivePanel] = useState<ActivePanel>("setup");
+  const [setupView, setSetupView] = useState<SetupView>("main");
   const [isLeaderboardOpen, setIsLeaderboardOpen] = useState(true);
 
   const [activeCourse, setActiveCourse] = useState<Course>(DEFAULT_COURSE);
+  const [savedCourses, setSavedCourses] = useState<SavedCourseRecord[]>([]);
+  const [hasLoadedSavedCourses, setHasLoadedSavedCourses] = useState(false);
 
   const [status, setStatus] = useState("지도 초기화 중...");
   const [error, setError] = useState<string | null>(null);
@@ -284,11 +385,15 @@ export default function RaceMap() {
   const [isCustomCourseMode, setIsCustomCourseMode] = useState(false);
   const [customPointStep, setCustomPointStep] =
     useState<CustomPointStep>("start");
+  const [customGuide, setCustomGuide] =
+    useState<CustomGuide>(null);
   const [customPoints, setCustomPoints] =
     useState<CustomCoursePoints>(INITIAL_CUSTOM_POINTS);
   const [customCourseError, setCustomCourseError] = useState<string | null>(
     null
   );
+  const [isOneTimeCustomCourse, setIsOneTimeCustomCourse] = useState(true);
+  const [customCourseName, setCustomCourseName] = useState("");
 
   const [runnerHud, setRunnerHud] = useState<RunnerHudState[]>([]);
   const [isSecureContextState, setIsSecureContextState] = useState<
@@ -308,6 +413,10 @@ export default function RaceMap() {
   const selectedBots = useMemo(() => {
     return DEFAULT_BOTS.filter((bot) => selectedBotIds.includes(bot.id));
   }, [selectedBotIds]);
+
+  const sortedSavedCourses = useMemo(() => {
+    return getSortedSavedCourses(savedCourses);
+  }, [savedCourses]);
 
   const canBuildCustomCourse =
     Boolean(customPoints.start) &&
@@ -469,17 +578,20 @@ export default function RaceMap() {
 
     if (type === "start") {
       setCustomPointStep("finish");
-      setStatus("종료지점을 선택하거나, 반환점 추가를 누른 뒤 반환점을 선택하세요.");
+      setCustomGuide("add-turnaround");
+      setStatus("시작지점 선택 완료");
       return;
     }
 
     if (type === "turnaround") {
       setCustomPointStep("finish");
-      setStatus("종료지점을 선택하세요. 왕복이면 '종료=시작'을 누르세요.");
+      setCustomGuide("select-finish");
+      setStatus("반환점 선택 완료");
       return;
     }
 
-    setStatus("커스텀 코스 지점 선택 완료. 코스 생성을 누르세요.");
+    setCustomGuide("build-course");
+    setStatus("종료지점 선택 완료");
   }
 
   function removeCustomPoint(type: CustomPointStep) {
@@ -487,20 +599,23 @@ export default function RaceMap() {
     marker?.remove();
     delete customPointMarkerRefs.current[type];
 
-    setCustomPoints((current) => {
-      const next = {
-        ...current,
-        [type]: null,
-      };
+    const next = {
+      ...customPoints,
+      [type]: null,
+    };
 
-      if (type === "start") {
-        setCustomPointStep("start");
-      } else {
-        setCustomPointStep(getNextRequiredStep(next));
-      }
+    setCustomPoints(next);
 
-      return next;
-    });
+    if (!next.start) {
+      setCustomPointStep("start");
+      setCustomGuide("select-start");
+    } else if (!next.finish) {
+      setCustomPointStep(getNextRequiredStep(next));
+      setCustomGuide("select-finish");
+    } else {
+      setCustomPointStep("finish");
+      setCustomGuide("build-course");
+    }
 
     setCustomCourseError(null);
     setStatus(`${getCustomPointLabel(type)} 지점을 취소했습니다.`);
@@ -508,10 +623,136 @@ export default function RaceMap() {
 
   function resetCustomCourseDraft() {
     setCustomPointStep("start");
+    setCustomGuide("select-start");
     setCustomPoints(INITIAL_CUSTOM_POINTS);
     setCustomCourseError(null);
     clearCustomPointMarkers();
-    setStatus("커스텀 코스 지점을 초기화했습니다. 시작지점을 선택하세요.");
+    setStatus("커스텀 코스 지점을 초기화했습니다.");
+  }
+
+  function saveCustomCourse(course: Course) {
+    const now = Date.now();
+    const minOrder = savedCourses.reduce(
+      (min, item) => Math.min(min, item.order),
+      0
+    );
+
+    const record: SavedCourseRecord = {
+      ...course,
+      savedId: `saved-course-${now}`,
+      favorite: false,
+      order: minOrder - 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    setSavedCourses((current) => [record, ...current]);
+  }
+
+  function applySavedCourse(course: SavedCourseRecord) {
+    const nextCourse: Course = {
+      id: course.id,
+      name: course.name,
+      distanceM: course.distanceM,
+      polyline: course.polyline,
+    };
+
+    gpsTracker.stop();
+    latestGpsProjectionRef.current = null;
+    clearCustomPointMarkers();
+
+    setIsCustomCourseMode(false);
+    setActiveCourse(nextCourse);
+    setActivePanel("map");
+    setSetupView("main");
+    setStatus(`${course.name} 코스를 적용했습니다.`);
+  }
+
+  function toggleSavedCourseFavorite(savedId: string) {
+    setSavedCourses((current) =>
+      current.map((course) =>
+        course.savedId === savedId
+          ? {
+              ...course,
+              favorite: !course.favorite,
+              updatedAt: Date.now(),
+            }
+          : course
+      )
+    );
+  }
+
+  function canMoveSavedCourse(savedId: string, direction: "up" | "down") {
+    const index = sortedSavedCourses.findIndex(
+      (course) => course.savedId === savedId
+    );
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+
+    if (index < 0 || targetIndex < 0 || targetIndex >= sortedSavedCourses.length) {
+      return false;
+    }
+
+    return (
+      sortedSavedCourses[index].favorite ===
+      sortedSavedCourses[targetIndex].favorite
+    );
+  }
+
+  function moveSavedCourse(savedId: string, direction: "up" | "down") {
+    if (!canMoveSavedCourse(savedId, direction)) return;
+
+    const index = sortedSavedCourses.findIndex(
+      (course) => course.savedId === savedId
+    );
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+
+    const source = sortedSavedCourses[index];
+    const target = sortedSavedCourses[targetIndex];
+
+    setSavedCourses((current) =>
+      current.map((course) => {
+        if (course.savedId === source.savedId) {
+          return {
+            ...course,
+            order: target.order,
+            updatedAt: Date.now(),
+          };
+        }
+
+        if (course.savedId === target.savedId) {
+          return {
+            ...course,
+            order: source.order,
+            updatedAt: Date.now(),
+          };
+        }
+
+        return course;
+      })
+    );
+  }
+
+  function deleteSavedCourse(savedId: string) {
+    const target = savedCourses.find((course) => course.savedId === savedId);
+
+    if (target && !window.confirm(`"${target.name}" 코스를 삭제할까요?`)) {
+      return;
+    }
+
+    setSavedCourses((current) =>
+      current.filter((course) => course.savedId !== savedId)
+    );
+  }
+
+  function closeCustomGuide() {
+    if (customGuide === "add-turnaround") {
+      setCustomGuide("select-finish");
+      setCustomPointStep("finish");
+      setStatus("지도에서 종료지점을 선택하세요.");
+      return;
+    }
+
+    setCustomGuide(null);
   }
 
   useEffect(() => {
@@ -519,6 +760,44 @@ export default function RaceMap() {
       typeof window !== "undefined" ? window.isSecureContext : null
     );
   }, []);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(SAVED_COURSES_STORAGE_KEY);
+
+      if (!raw) {
+        setSavedCourses([]);
+        return;
+      }
+
+      const parsed = JSON.parse(raw);
+
+      if (!Array.isArray(parsed)) {
+        setSavedCourses([]);
+        return;
+      }
+
+      setSavedCourses(
+        parsed
+          .map(validateSavedCourseRecord)
+          .filter((course): course is SavedCourseRecord => Boolean(course))
+      );
+    } catch (error) {
+      console.warn("Failed to load saved courses:", error);
+      setSavedCourses([]);
+    } finally {
+      setHasLoadedSavedCourses(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!hasLoadedSavedCourses) return;
+
+    window.localStorage.setItem(
+      SAVED_COURSES_STORAGE_KEY,
+      JSON.stringify(savedCourses)
+    );
+  }, [savedCourses, hasLoadedSavedCourses]);
 
   useEffect(() => {
     latestGpsProjectionRef.current = gpsTracker.latestProjection;
@@ -911,10 +1190,12 @@ export default function RaceMap() {
       clearCustomPointMarkers();
 
       setIsCustomCourseMode(false);
+      setCustomGuide(null);
       setCustomPoints(INITIAL_CUSTOM_POINTS);
       setPlayerMode("gps");
       setActiveCourse(nextCourse);
       setActivePanel("map");
+      setSetupView("main");
       setGpsActionError(null);
       setStatus(
         `현재 위치 기준 코스 생성 완료 · ${(nextCourse.distanceM / 1000).toFixed(
@@ -936,17 +1217,22 @@ export default function RaceMap() {
 
     setIsCustomCourseMode(true);
     setCustomPointStep("start");
+    setCustomGuide("select-start");
     setCustomPoints(INITIAL_CUSTOM_POINTS);
     setCustomCourseError(null);
+    setIsOneTimeCustomCourse(true);
+    setCustomCourseName("");
     clearCustomPointMarkers();
     setIsLeaderboardOpen(false);
     setActivePanel("map");
-    setStatus("커스텀 코스 생성: 지도에서 시작지점을 선택하세요.");
+    setSetupView("main");
+    setStatus("커스텀 코스 생성: 시작지점을 선택하세요.");
   }
 
   function handleCancelCustomCourseMode() {
     setIsCustomCourseMode(false);
     setCustomPointStep("start");
+    setCustomGuide(null);
     setCustomPoints(INITIAL_CUSTOM_POINTS);
     setCustomCourseError(null);
     clearCustomPointMarkers();
@@ -965,6 +1251,7 @@ export default function RaceMap() {
     }
 
     setCustomPointStep("turnaround");
+    setCustomGuide("select-turnaround");
     setCustomCourseError(null);
     setStatus("지도에서 반환점을 선택하세요.");
   }
@@ -1003,6 +1290,13 @@ export default function RaceMap() {
       return;
     }
 
+    const trimmedName = customCourseName.trim();
+    const finalName = isOneTimeCustomCourse
+      ? customPoints.turnaround
+        ? "일회성 경유 코스"
+        : "일회성 코스"
+      : trimmedName || `나의 코스 ${savedCourses.length + 1}`;
+
     try {
       setIsGeneratingCustomCourse(true);
       setCustomCourseError(null);
@@ -1013,22 +1307,28 @@ export default function RaceMap() {
         turnaround: customPoints.turnaround,
         finish: customPoints.finish,
         token,
-        name: customPoints.turnaround ? "커스텀 경유 코스" : "커스텀 코스",
+        name: finalName,
       });
 
       gpsTracker.stop();
       latestGpsProjectionRef.current = null;
       clearCustomPointMarkers();
 
+      if (!isOneTimeCustomCourse) {
+        saveCustomCourse(nextCourse);
+      }
+
       setIsCustomCourseMode(false);
+      setCustomGuide(null);
       setCustomPointStep("start");
       setCustomPoints(INITIAL_CUSTOM_POINTS);
       setActiveCourse(nextCourse);
       setActivePanel("map");
+      setSetupView("main");
       setStatus(
-        `커스텀 코스 생성 완료 · ${(nextCourse.distanceM / 1000).toFixed(
-          2
-        )}km · 좌표 ${nextCourse.polyline.length}개`
+        `${isOneTimeCustomCourse ? "일회성" : "저장"} 코스 생성 완료 · ${(
+          nextCourse.distanceM / 1000
+        ).toFixed(2)}km`
       );
     } catch (rawError) {
       const message =
@@ -1075,6 +1375,7 @@ export default function RaceMap() {
     setIsRunning(true);
     setIsLeaderboardOpen(true);
     setActivePanel("map");
+    setSetupView("main");
   }
 
   function handleResetRace() {
@@ -1132,7 +1433,10 @@ export default function RaceMap() {
       <div className="race-top-tabs">
         <button
           type="button"
-          onClick={() => setActivePanel("setup")}
+          onClick={() => {
+            setActivePanel("setup");
+            setSetupView("main");
+          }}
           className={`race-tab-button ${
             activePanel === "setup" ? "race-tab-active" : ""
           }`}
@@ -1151,7 +1455,23 @@ export default function RaceMap() {
         </button>
       </div>
 
-      {activePanel === "setup" && (
+      {activePanel === "map" && isCustomCourseMode && customGuide && (
+        <div className="custom-guide-toast">
+          <div className="custom-guide-text">{getCustomGuideText(customGuide)}</div>
+          {customGuide === "add-turnaround" && (
+            <button
+              type="button"
+              onClick={closeCustomGuide}
+              className="custom-guide-close"
+              aria-label="닫기"
+            >
+              ×
+            </button>
+          )}
+        </div>
+      )}
+
+      {activePanel === "setup" && setupView === "main" && (
         <div className="race-panel race-setup-panel">
           {error ? (
             <div className="rounded-xl bg-red-50 p-3 text-sm text-red-700">
@@ -1167,8 +1487,18 @@ export default function RaceMap() {
               </div>
 
               <div className="rounded-xl border border-slate-200 bg-white p-3">
-                <div className="mb-2 text-sm font-semibold text-slate-900">
-                  코스
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="text-sm font-semibold text-slate-900">
+                    코스
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setSetupView("myCourses")}
+                    className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700"
+                  >
+                    나의 코스
+                  </button>
                 </div>
 
                 <div className="rounded-lg bg-slate-50 p-2 text-xs text-slate-700">
@@ -1390,6 +1720,108 @@ export default function RaceMap() {
         </div>
       )}
 
+      {activePanel === "setup" && setupView === "myCourses" && (
+        <div className="race-panel race-setup-panel">
+          <div className="mx-auto max-w-[560px] space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-2xl font-bold text-slate-900">
+                  나의 코스
+                </div>
+                <div className="text-xs text-slate-500">
+                  즐겨찾기 코스가 최상단에 표시됩니다.
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setSetupView("main")}
+                className="rounded-lg bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow"
+              >
+                뒤로
+              </button>
+            </div>
+
+            {sortedSavedCourses.length === 0 ? (
+              <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-600">
+                저장한 코스가 없습니다. 커스텀 코스를 만들 때 일회성 옵션을
+                끄면 이곳에 저장됩니다.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {sortedSavedCourses.map((course) => (
+                  <div
+                    key={course.savedId}
+                    className="rounded-xl border border-slate-200 bg-white p-3"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="font-semibold text-slate-900">
+                          {course.favorite ? "★ " : ""}
+                          {course.name}
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {(course.distanceM / 1000).toFixed(2)} km · 좌표{" "}
+                          {course.polyline.length}개
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => toggleSavedCourseFavorite(course.savedId)}
+                        className={`rounded-lg px-2 py-1 text-xs font-semibold ${
+                          course.favorite
+                            ? "bg-yellow-100 text-yellow-800"
+                            : "bg-slate-100 text-slate-700"
+                        }`}
+                      >
+                        {course.favorite ? "즐겨찾기 해제" : "즐겨찾기"}
+                      </button>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-5 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => applySavedCourse(course)}
+                        className="col-span-2 rounded-lg bg-blue-600 px-2 py-2 text-xs font-semibold text-white"
+                      >
+                        적용
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => moveSavedCourse(course.savedId, "up")}
+                        disabled={!canMoveSavedCourse(course.savedId, "up")}
+                        className="rounded-lg bg-slate-100 px-2 py-2 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        위
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => moveSavedCourse(course.savedId, "down")}
+                        disabled={!canMoveSavedCourse(course.savedId, "down")}
+                        className="rounded-lg bg-slate-100 px-2 py-2 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        아래
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => deleteSavedCourse(course.savedId)}
+                        className="rounded-lg bg-red-50 px-2 py-2 text-xs font-semibold text-red-700"
+                      >
+                        삭제
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {activePanel === "map" && isCustomCourseMode && (
         <div className="race-panel race-custom-panel">
           <div className="mb-2 flex items-start justify-between gap-3">
@@ -1442,6 +1874,31 @@ export default function RaceMap() {
             )}
           </div>
 
+          <div className="mt-3 rounded-lg bg-slate-50 p-2">
+            <label className="flex items-center justify-between gap-3 text-xs font-semibold text-slate-700">
+              <span>일회성 코스</span>
+              <input
+                type="checkbox"
+                checked={isOneTimeCustomCourse}
+                onChange={(event) => setIsOneTimeCustomCourse(event.target.checked)}
+              />
+            </label>
+
+            {!isOneTimeCustomCourse && (
+              <label className="mt-2 block space-y-1">
+                <div className="text-xs font-medium text-slate-600">
+                  코스 이름
+                </div>
+                <input
+                  value={customCourseName}
+                  onChange={(event) => setCustomCourseName(event.target.value)}
+                  placeholder="예: 학교 3K 루프"
+                  className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 outline-none focus:border-blue-500"
+                />
+              </label>
+            )}
+          </div>
+
           {customCourseError && (
             <div className="mt-2 rounded-lg bg-red-50 p-2 text-xs text-red-700">
               {customCourseError}
@@ -1488,8 +1945,8 @@ export default function RaceMap() {
           </div>
 
           <div className="mt-2 text-[11px] text-slate-500">
-            마커를 길게 누른 채 움직이면 위치를 조정할 수 있습니다. 시작과
-            종료는 필수이고, 반환점은 선택입니다.
+            마커를 길게 누른 채 움직이면 위치를 조정할 수 있습니다. 저장형
+            코스는 설정 탭의 나의 코스에서 다시 선택할 수 있습니다.
           </div>
         </div>
       )}
@@ -1519,7 +1976,10 @@ export default function RaceMap() {
 
               <button
                 type="button"
-                onClick={() => setActivePanel("setup")}
+                onClick={() => {
+                  setActivePanel("setup");
+                  setSetupView("main");
+                }}
                 className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700"
               >
                 설정
@@ -1730,11 +2190,46 @@ export default function RaceMap() {
         }
 
         .race-custom-panel {
-          max-height: min(56vh, 430px);
+          max-height: min(62vh, 500px);
         }
 
         .race-runner-list {
           max-height: 210px;
+        }
+
+        .custom-guide-toast {
+          position: absolute;
+          z-index: 60;
+          top: calc(max(8px, env(safe-area-inset-top)) + 54px);
+          left: 10px;
+          right: 10px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          border-radius: 18px;
+          background: rgba(15, 23, 42, 0.94);
+          color: white;
+          padding: 12px 14px;
+          box-shadow: 0 18px 48px rgba(15, 23, 42, 0.3);
+        }
+
+        .custom-guide-text {
+          font-size: 14px;
+          font-weight: 800;
+          line-height: 1.35;
+        }
+
+        .custom-guide-close {
+          border: 0;
+          border-radius: 9999px;
+          width: 28px;
+          height: 28px;
+          background: rgba(255, 255, 255, 0.14);
+          color: white;
+          font-size: 20px;
+          line-height: 1;
+          font-weight: 800;
         }
 
         @media (orientation: landscape) and (max-height: 560px) {
@@ -1743,6 +2238,12 @@ export default function RaceMap() {
             right: auto;
             width: min(390px, 42vw);
             grid-template-columns: 1fr 1fr;
+          }
+
+          .custom-guide-toast {
+            left: calc(min(390px, 42vw) + 20px);
+            right: 10px;
+            top: max(8px, env(safe-area-inset-top));
           }
 
           .race-setup-panel {
@@ -1785,6 +2286,12 @@ export default function RaceMap() {
             left: 16px;
             right: auto;
             width: 390px;
+          }
+
+          .custom-guide-toast {
+            left: 424px;
+            right: 16px;
+            top: 16px;
           }
 
           .race-setup-panel {
@@ -1836,6 +2343,11 @@ export default function RaceMap() {
           .race-tab-button {
             padding: 9px 10px;
             font-size: 13px;
+          }
+
+          .custom-guide-toast {
+            left: 8px;
+            right: 8px;
           }
         }
       `}</style>
