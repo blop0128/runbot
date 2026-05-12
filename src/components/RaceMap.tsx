@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
 import { HAN_RIVER_YEOUIDO_5K } from "@/lib/courses/hanRiver";
 import {
+  generateCustomWalkingCourse,
   generateLocalOutAndBackCourse,
   type Course,
   type LngLat,
@@ -18,6 +19,7 @@ import {
 
 type PlayerMode = "pace" | "gps";
 type ActivePanel = "setup" | "map";
+type CustomPointStep = "start" | "turnaround" | "finish";
 
 type RunnerHudState = {
   id: string;
@@ -29,6 +31,12 @@ type RunnerHudState = {
   finished: boolean;
 };
 
+type CustomCoursePoints = {
+  start: LngLat | null;
+  turnaround: LngLat | null;
+  finish: LngLat | null;
+};
+
 const INITIAL_SELECTED_BOT_IDS = ["bot_600", "bot_500", "bot_400"];
 
 const DEFAULT_COURSE: Course = {
@@ -36,6 +44,12 @@ const DEFAULT_COURSE: Course = {
   name: HAN_RIVER_YEOUIDO_5K.name,
   distanceM: HAN_RIVER_YEOUIDO_5K.distanceM,
   polyline: HAN_RIVER_YEOUIDO_5K.polyline,
+};
+
+const INITIAL_CUSTOM_POINTS: CustomCoursePoints = {
+  start: null,
+  turnaround: null,
+  finish: null,
 };
 
 function parsePaceInput(input: string): number {
@@ -158,6 +172,74 @@ function makeCourseGeoJson(course: Course) {
   } as const;
 }
 
+function formatPoint(point: LngLat | null): string {
+  if (!point) return "미선택";
+  return `${point[1].toFixed(5)}, ${point[0].toFixed(5)}`;
+}
+
+function getCustomStepLabel(step: CustomPointStep): string {
+  if (step === "start") return "시작지점";
+  if (step === "turnaround") return "반환점";
+  return "종료지점";
+}
+
+function getCustomPointLabel(type: CustomPointStep): string {
+  if (type === "start") return "시작";
+  if (type === "turnaround") return "반환";
+  return "종료";
+}
+
+function getCustomPointColor(type: CustomPointStep): string {
+  if (type === "start") return "#16a34a";
+  if (type === "turnaround") return "#f97316";
+  return "#dc2626";
+}
+
+function getNextRequiredStep(points: CustomCoursePoints): CustomPointStep {
+  if (!points.start) return "start";
+  if (!points.finish) return "finish";
+  return "finish";
+}
+
+function createCustomPointMarkerElement(type: CustomPointStep) {
+  const wrapper = document.createElement("div");
+  wrapper.style.display = "flex";
+  wrapper.style.flexDirection = "column";
+  wrapper.style.alignItems = "center";
+  wrapper.style.gap = "2px";
+  wrapper.style.touchAction = "none";
+  wrapper.style.cursor = "grab";
+
+  const dot = document.createElement("div");
+  dot.textContent = type === "start" ? "S" : type === "turnaround" ? "T" : "F";
+  dot.style.width = "34px";
+  dot.style.height = "34px";
+  dot.style.borderRadius = "9999px";
+  dot.style.background = getCustomPointColor(type);
+  dot.style.color = "white";
+  dot.style.display = "flex";
+  dot.style.alignItems = "center";
+  dot.style.justifyContent = "center";
+  dot.style.boxShadow = "0 4px 12px rgba(0,0,0,0.28)";
+  dot.style.border = "2px solid white";
+  dot.style.fontSize = "14px";
+  dot.style.fontWeight = "800";
+
+  const text = document.createElement("div");
+  text.textContent = getCustomPointLabel(type);
+  text.style.background = "rgba(15, 23, 42, 0.9)";
+  text.style.color = "white";
+  text.style.padding = "2px 6px";
+  text.style.borderRadius = "9999px";
+  text.style.fontSize = "11px";
+  text.style.whiteSpace = "nowrap";
+
+  wrapper.appendChild(dot);
+  wrapper.appendChild(text);
+
+  return wrapper;
+}
+
 export default function RaceMap() {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -166,6 +248,9 @@ export default function RaceMap() {
   const finishMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const playerMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const botMarkerRefs = useRef<Record<string, mapboxgl.Marker>>({});
+  const customPointMarkerRefs = useRef<
+    Partial<Record<CustomPointStep, mapboxgl.Marker>>
+  >({});
 
   const animationFrameRef = useRef<number | null>(null);
   const lastHudUpdateRef = useRef<number>(0);
@@ -182,6 +267,8 @@ export default function RaceMap() {
 
   const [isMapLoaded, setIsMapLoaded] = useState(false);
   const [isGeneratingCourse, setIsGeneratingCourse] = useState(false);
+  const [isGeneratingCustomCourse, setIsGeneratingCustomCourse] =
+    useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [startTimeMs, setStartTimeMs] = useState<number | null>(null);
   const [elapsedSec, setElapsedSec] = useState(0);
@@ -192,6 +279,15 @@ export default function RaceMap() {
 
   const [selectedBotIds, setSelectedBotIds] = useState<string[]>(
     INITIAL_SELECTED_BOT_IDS
+  );
+
+  const [isCustomCourseMode, setIsCustomCourseMode] = useState(false);
+  const [customPointStep, setCustomPointStep] =
+    useState<CustomPointStep>("start");
+  const [customPoints, setCustomPoints] =
+    useState<CustomCoursePoints>(INITIAL_CUSTOM_POINTS);
+  const [customCourseError, setCustomCourseError] = useState<string | null>(
+    null
   );
 
   const [runnerHud, setRunnerHud] = useState<RunnerHudState[]>([]);
@@ -212,6 +308,11 @@ export default function RaceMap() {
   const selectedBots = useMemo(() => {
     return DEFAULT_BOTS.filter((bot) => selectedBotIds.includes(bot.id));
   }, [selectedBotIds]);
+
+  const canBuildCustomCourse =
+    Boolean(customPoints.start) &&
+    Boolean(customPoints.finish) &&
+    !isGeneratingCustomCourse;
 
   function createInitialHud(): RunnerHudState[] {
     return [
@@ -260,7 +361,7 @@ export default function RaceMap() {
       | undefined;
 
     if (source) {
-      source.setData(data);
+      source.setData(data as GeoJSON.Feature<GeoJSON.LineString>);
       return;
     }
 
@@ -300,6 +401,117 @@ export default function RaceMap() {
         marker.setLngLat(start);
       }
     });
+  }
+
+  function clearCustomPointMarkers() {
+    Object.values(customPointMarkerRefs.current).forEach((marker) => {
+      marker?.remove();
+    });
+
+    customPointMarkerRefs.current = {};
+  }
+
+  function updateCustomPointState(type: CustomPointStep, point: LngLat) {
+    setCustomPoints((current) => ({
+      ...current,
+      [type]: point,
+    }));
+  }
+
+  function setCustomPointMarker(type: CustomPointStep, point: LngLat) {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const existing = customPointMarkerRefs.current[type];
+
+    if (existing) {
+      existing.setLngLat(point);
+      return;
+    }
+
+    const marker = new mapboxgl.Marker({
+      element: createCustomPointMarkerElement(type),
+      draggable: true,
+      anchor: "bottom",
+    })
+      .setLngLat(point)
+      .setPopup(new mapboxgl.Popup().setText(getCustomPointLabel(type)))
+      .addTo(map);
+
+    marker.on("dragstart", () => {
+      marker.getElement().style.cursor = "grabbing";
+      setCustomCourseError(null);
+      setStatus(`${getCustomPointLabel(type)} 지점을 이동하는 중...`);
+    });
+
+    marker.on("drag", () => {
+      const lngLat = marker.getLngLat();
+      updateCustomPointState(type, [lngLat.lng, lngLat.lat]);
+    });
+
+    marker.on("dragend", () => {
+      const lngLat = marker.getLngLat();
+      const nextPoint: LngLat = [lngLat.lng, lngLat.lat];
+
+      updateCustomPointState(type, nextPoint);
+      marker.getElement().style.cursor = "grab";
+      setCustomCourseError(null);
+      setStatus(`${getCustomPointLabel(type)} 지점 이동 완료`);
+    });
+
+    customPointMarkerRefs.current[type] = marker;
+  }
+
+  function selectCustomPoint(type: CustomPointStep, point: LngLat) {
+    updateCustomPointState(type, point);
+    setCustomPointMarker(type, point);
+    setCustomCourseError(null);
+
+    if (type === "start") {
+      setCustomPointStep("finish");
+      setStatus("종료지점을 선택하거나, 반환점 추가를 누른 뒤 반환점을 선택하세요.");
+      return;
+    }
+
+    if (type === "turnaround") {
+      setCustomPointStep("finish");
+      setStatus("종료지점을 선택하세요. 왕복이면 '종료=시작'을 누르세요.");
+      return;
+    }
+
+    setStatus("커스텀 코스 지점 선택 완료. 코스 생성을 누르세요.");
+  }
+
+  function removeCustomPoint(type: CustomPointStep) {
+    const marker = customPointMarkerRefs.current[type];
+    marker?.remove();
+    delete customPointMarkerRefs.current[type];
+
+    setCustomPoints((current) => {
+      const next = {
+        ...current,
+        [type]: null,
+      };
+
+      if (type === "start") {
+        setCustomPointStep("start");
+      } else {
+        setCustomPointStep(getNextRequiredStep(next));
+      }
+
+      return next;
+    });
+
+    setCustomCourseError(null);
+    setStatus(`${getCustomPointLabel(type)} 지점을 취소했습니다.`);
+  }
+
+  function resetCustomCourseDraft() {
+    setCustomPointStep("start");
+    setCustomPoints(INITIAL_CUSTOM_POINTS);
+    setCustomCourseError(null);
+    clearCustomPointMarkers();
+    setStatus("커스텀 코스 지점을 초기화했습니다. 시작지점을 선택하세요.");
   }
 
   useEffect(() => {
@@ -412,6 +624,7 @@ export default function RaceMap() {
       }
 
       gpsTracker.stop();
+      clearCustomPointMarkers();
 
       startMarkerRef.current?.remove();
       startMarkerRef.current = null;
@@ -447,6 +660,35 @@ export default function RaceMap() {
     // activeCourse 변경 시 지도와 HUD를 확정 동기화
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeCourse, isMapLoaded]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const handleMapClick = (event: mapboxgl.MapMouseEvent) => {
+      if (!isCustomCourseMode || activePanel !== "map" || isRunning) return;
+
+      const target = event.originalEvent.target;
+
+      if (
+        target instanceof HTMLElement &&
+        target.closest(".mapboxgl-marker")
+      ) {
+        return;
+      }
+
+      const point: LngLat = [event.lngLat.lng, event.lngLat.lat];
+
+      selectCustomPoint(customPointStep, point);
+    };
+
+    map.on("click", handleMapClick);
+
+    return () => {
+      map.off("click", handleMapClick);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCustomCourseMode, activePanel, isRunning, customPointStep]);
 
   useEffect(() => {
     function handleResize() {
@@ -612,6 +854,7 @@ export default function RaceMap() {
     if (isRunning) return;
 
     setGpsActionError(null);
+    setCustomCourseError(null);
 
     if (isSecureContextState === false) {
       setGpsActionError("현재 위치 기준 코스 생성은 HTTPS 환경에서 테스트해야 합니다.");
@@ -665,7 +908,10 @@ export default function RaceMap() {
 
       gpsTracker.stop();
       latestGpsProjectionRef.current = null;
+      clearCustomPointMarkers();
 
+      setIsCustomCourseMode(false);
+      setCustomPoints(INITIAL_CUSTOM_POINTS);
       setPlayerMode("gps");
       setActiveCourse(nextCourse);
       setActivePanel("map");
@@ -673,7 +919,7 @@ export default function RaceMap() {
       setStatus(
         `현재 위치 기준 코스 생성 완료 · ${(nextCourse.distanceM / 1000).toFixed(
           2
-        )}km · 좌표 ${nextCourse.polyline.length}개`
+        )}km`
       );
     } catch (rawError) {
       const message = getPositionErrorMessage(rawError);
@@ -685,8 +931,125 @@ export default function RaceMap() {
     }
   }
 
+  function handleStartCustomCourseMode() {
+    if (isRunning) return;
+
+    setIsCustomCourseMode(true);
+    setCustomPointStep("start");
+    setCustomPoints(INITIAL_CUSTOM_POINTS);
+    setCustomCourseError(null);
+    clearCustomPointMarkers();
+    setIsLeaderboardOpen(false);
+    setActivePanel("map");
+    setStatus("커스텀 코스 생성: 지도에서 시작지점을 선택하세요.");
+  }
+
+  function handleCancelCustomCourseMode() {
+    setIsCustomCourseMode(false);
+    setCustomPointStep("start");
+    setCustomPoints(INITIAL_CUSTOM_POINTS);
+    setCustomCourseError(null);
+    clearCustomPointMarkers();
+    setStatus("커스텀 코스 생성을 취소했습니다.");
+  }
+
+  function handleAddTurnaroundPoint() {
+    if (!customPoints.start) {
+      setCustomCourseError("먼저 시작지점을 선택해야 합니다.");
+      return;
+    }
+
+    if (customPoints.finish) {
+      setCustomCourseError("이미 종료지점을 선택했습니다. 다시 만들려면 취소 후 시작하세요.");
+      return;
+    }
+
+    setCustomPointStep("turnaround");
+    setCustomCourseError(null);
+    setStatus("지도에서 반환점을 선택하세요.");
+  }
+
+  function handleUseStartAsFinish() {
+    if (!customPoints.start) {
+      setCustomCourseError("먼저 시작지점을 선택해야 합니다.");
+      return;
+    }
+
+    if (!customPoints.turnaround) {
+      setCustomCourseError("시작과 종료가 같으려면 반환점이 필요합니다.");
+      return;
+    }
+
+    selectCustomPoint("finish", customPoints.start);
+  }
+
+  async function handleBuildCustomCourse() {
+    if (isRunning) return;
+
+    const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+
+    if (!token) {
+      setCustomCourseError("Mapbox token이 없습니다.");
+      return;
+    }
+
+    if (!customPoints.start) {
+      setCustomCourseError("시작지점은 필수입니다.");
+      return;
+    }
+
+    if (!customPoints.finish) {
+      setCustomCourseError("종료지점은 필수입니다.");
+      return;
+    }
+
+    try {
+      setIsGeneratingCustomCourse(true);
+      setCustomCourseError(null);
+      setStatus("선택한 지점 기준으로 코스를 생성하는 중...");
+
+      const nextCourse = await generateCustomWalkingCourse({
+        start: customPoints.start,
+        turnaround: customPoints.turnaround,
+        finish: customPoints.finish,
+        token,
+        name: customPoints.turnaround ? "커스텀 경유 코스" : "커스텀 코스",
+      });
+
+      gpsTracker.stop();
+      latestGpsProjectionRef.current = null;
+      clearCustomPointMarkers();
+
+      setIsCustomCourseMode(false);
+      setCustomPointStep("start");
+      setCustomPoints(INITIAL_CUSTOM_POINTS);
+      setActiveCourse(nextCourse);
+      setActivePanel("map");
+      setStatus(
+        `커스텀 코스 생성 완료 · ${(nextCourse.distanceM / 1000).toFixed(
+          2
+        )}km · 좌표 ${nextCourse.polyline.length}개`
+      );
+    } catch (rawError) {
+      const message =
+        rawError instanceof Error
+          ? rawError.message
+          : "커스텀 코스를 생성하지 못했습니다.";
+
+      setCustomCourseError(message);
+      setStatus("커스텀 코스 생성 실패");
+    } finally {
+      setIsGeneratingCustomCourse(false);
+    }
+  }
+
   function handleStartRace() {
     if (!isMapLoaded) return;
+
+    if (isCustomCourseMode) {
+      setStatus("커스텀 코스 생성 중에는 레이스를 시작할 수 없습니다.");
+      return;
+    }
 
     if (playerMode === "gps" && isSecureContextState === false) {
       setStatus("GPS Beta는 HTTPS 환경에서 테스트해야 합니다.");
@@ -826,6 +1189,15 @@ export default function RaceMap() {
                       ? "현재 위치 코스 생성 중..."
                       : "현재 위치 기준 1K 코스 생성"}
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={handleStartCustomCourseMode}
+                    disabled={isRunning}
+                    className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    커스텀 코스 만들기
+                  </button>
                 </div>
 
                 {gpsActionError && (
@@ -945,11 +1317,6 @@ export default function RaceMap() {
                       {gpsTracker.lastRejectedReason}
                     </div>
                   )}
-
-                  <div className="mt-2 text-[11px] text-orange-800">
-                    먼저 현재 위치 기준 코스를 생성한 뒤 Start Race를 누르는
-                    것이 좋습니다.
-                  </div>
                 </div>
               )}
 
@@ -1023,7 +1390,111 @@ export default function RaceMap() {
         </div>
       )}
 
-      {activePanel === "map" && (
+      {activePanel === "map" && isCustomCourseMode && (
+        <div className="race-panel race-custom-panel">
+          <div className="mb-2 flex items-start justify-between gap-3">
+            <div>
+              <div className="text-sm font-bold text-slate-900">
+                커스텀 코스 생성
+              </div>
+              <div className="text-xs text-slate-500">
+                다음 선택: {getCustomStepLabel(customPointStep)}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleCancelCustomCourseMode}
+              className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700"
+            >
+              취소
+            </button>
+          </div>
+
+          <div className="space-y-2 rounded-lg bg-slate-50 p-2 text-xs text-slate-700">
+            {(["start", "turnaround", "finish"] as CustomPointStep[]).map(
+              (pointType) => {
+                const point = customPoints[pointType];
+
+                return (
+                  <div
+                    key={pointType}
+                    className="flex items-center justify-between gap-2"
+                  >
+                    <div>
+                      <span className="font-semibold">
+                        {getCustomPointLabel(pointType)}:
+                      </span>{" "}
+                      {formatPoint(point)}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => removeCustomPoint(pointType)}
+                      disabled={!point}
+                      className="rounded-md bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      취소
+                    </button>
+                  </div>
+                );
+              }
+            )}
+          </div>
+
+          {customCourseError && (
+            <div className="mt-2 rounded-lg bg-red-50 p-2 text-xs text-red-700">
+              {customCourseError}
+            </div>
+          )}
+
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={handleAddTurnaroundPoint}
+              disabled={!customPoints.start || Boolean(customPoints.finish)}
+              className="rounded-lg bg-orange-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              반환점 추가
+            </button>
+
+            <button
+              type="button"
+              onClick={handleUseStartAsFinish}
+              disabled={!customPoints.start || !customPoints.turnaround}
+              className="rounded-lg bg-slate-700 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              종료=시작
+            </button>
+          </div>
+
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={resetCustomCourseDraft}
+              className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700"
+            >
+              전체 초기화
+            </button>
+
+            <button
+              type="button"
+              onClick={handleBuildCustomCourse}
+              disabled={!canBuildCustomCourse}
+              className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              {isGeneratingCustomCourse ? "생성 중..." : "코스 생성"}
+            </button>
+          </div>
+
+          <div className="mt-2 text-[11px] text-slate-500">
+            마커를 길게 누른 채 움직이면 위치를 조정할 수 있습니다. 시작과
+            종료는 필수이고, 반환점은 선택입니다.
+          </div>
+        </div>
+      )}
+
+      {activePanel === "map" && !isCustomCourseMode && (
         <div
           className={`race-panel race-map-hud ${
             isLeaderboardOpen ? "race-map-hud-open" : "race-map-hud-collapsed"
@@ -1238,7 +1709,8 @@ export default function RaceMap() {
             max(18px, env(safe-area-inset-bottom)) 14px;
         }
 
-        .race-map-hud {
+        .race-map-hud,
+        .race-custom-panel {
           left: 10px;
           right: 10px;
           bottom: max(10px, env(safe-area-inset-bottom));
@@ -1255,6 +1727,10 @@ export default function RaceMap() {
 
         .race-map-hud-collapsed {
           max-height: 176px;
+        }
+
+        .race-custom-panel {
+          max-height: min(56vh, 430px);
         }
 
         .race-runner-list {
@@ -1278,7 +1754,8 @@ export default function RaceMap() {
               max(14px, env(safe-area-inset-bottom)) 16px;
           }
 
-          .race-map-hud {
+          .race-map-hud,
+          .race-custom-panel {
             top: calc(max(8px, env(safe-area-inset-top)) + 52px);
             bottom: 10px;
             left: 10px;
@@ -1288,7 +1765,8 @@ export default function RaceMap() {
             padding: 12px;
           }
 
-          .race-map-hud-open {
+          .race-map-hud-open,
+          .race-custom-panel {
             max-height: none;
           }
 
@@ -1317,7 +1795,8 @@ export default function RaceMap() {
             padding: 84px 24px 24px 24px;
           }
 
-          .race-map-hud {
+          .race-map-hud,
+          .race-custom-panel {
             top: 72px;
             bottom: auto;
             left: 16px;
@@ -1327,7 +1806,8 @@ export default function RaceMap() {
             padding: 14px;
           }
 
-          .race-map-hud-open {
+          .race-map-hud-open,
+          .race-custom-panel {
             max-height: calc(100dvh - 88px);
           }
 
@@ -1346,7 +1826,8 @@ export default function RaceMap() {
             padding-right: 10px;
           }
 
-          .race-map-hud {
+          .race-map-hud,
+          .race-custom-panel {
             left: 8px;
             right: 8px;
             padding: 10px;
