@@ -464,7 +464,6 @@ export default function RaceMap() {
 
   const [status, setStatus] = useState("지도 초기화 중...");
   const [error, setError] = useState<string | null>(null);
-  const [gpsActionError, setGpsActionError] = useState<string | null>(null);
 
   const [isMapLoaded, setIsMapLoaded] = useState(false);
   const [isGeneratingCustomCourse, setIsGeneratingCustomCourse] =
@@ -1714,7 +1713,6 @@ export default function RaceMap() {
     if (isRunning) return;
 
     setAutoLoopError(null);
-    setGpsActionError(null);
     setCustomCourseError(null);
     setAutoLoopAllCandidates([]);
     setAutoLoopCandidates([]);
@@ -2033,12 +2031,6 @@ export default function RaceMap() {
                     커스텀 코스 만들기
                   </button>
                 </div>
-
-                {gpsActionError && (
-                  <div className="mt-2 rounded-lg bg-red-50 p-2 text-xs text-red-700">
-                    {gpsActionError}
-                  </div>
-                )}
               </div>
 
               <div className="rounded-xl border border-slate-200 bg-white p-3">
