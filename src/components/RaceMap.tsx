@@ -105,7 +105,7 @@ type DirectionsResponse = {
   message?: string;
 };
 
-const INITIAL_SELECTED_BOT_IDS = ["bot_600", "bot_500", "bot_400"];
+const INITIAL_SELECTED_BOT_IDS: string[] = [];
 const SAVED_COURSES_STORAGE_KEY = "runbot:savedCourses:v1";
 const CUSTOM_COURSES_STORAGE_KEY = "runbot:customCourses:v1";
 const AUTO_LOOP_PAGE_SIZE = 5;
@@ -968,6 +968,7 @@ export default function RaceMap() {
   const [setupView, setSetupView] = useState<SetupView>("main");
   const [isLeaderboardOpen, setIsLeaderboardOpen] = useState(true);
   const [isAutoLoopPanelCollapsed, setIsAutoLoopPanelCollapsed] = useState(false);
+  const [isRunSettingsOpen, setIsRunSettingsOpen] = useState(false);
 
   const [activeCourse, setActiveCourse] = useState<Course>(DEFAULT_COURSE);
   const [activeCourseMode, setActiveCourseMode] = useState<CandidateMode | "custom" | "saved" | null>(null);
@@ -979,7 +980,7 @@ export default function RaceMap() {
   const [customCourses, setCustomCourses] = useState<CustomCourseRecord[]>([]);
   const [hasLoadedCustomCourses, setHasLoadedCustomCourses] = useState(false);
 
-  const [status, setStatus] = useState("지도 초기화 중...");
+  const [status, setStatus] = useState("코스를 선택해 주세요.");
   const [error, setError] = useState<string | null>(null);
   const [gpsActionError, setGpsActionError] = useState<string | null>(null);
   const [currentMapLocation, setCurrentMapLocation] = useState<LngLat | null>(null);
@@ -1016,7 +1017,7 @@ export default function RaceMap() {
 
   const [playerName, setPlayerName] = useState("Me");
   const [paceInput, setPaceInput] = useState("5:30");
-  const [playerMode, setPlayerMode] = useState<PlayerMode>("pace");
+  const [playerMode, setPlayerMode] = useState<PlayerMode>("gps");
 
   const [selectedBotIds, setSelectedBotIds] = useState<string[]>(
     INITIAL_SELECTED_BOT_IDS
@@ -2252,7 +2253,7 @@ export default function RaceMap() {
     map.addControl(new mapboxgl.NavigationControl(), "top-right");
 
     map.on("load", () => {
-      setStatus("지도 로딩 완료");
+      setStatus("코스를 선택해 주세요.");
       setIsMapLoaded(true);
 
       enableTerrainElevationSource(map);
@@ -2951,7 +2952,26 @@ export default function RaceMap() {
     }
   }
 
+  function handleOpenRunSettings() {
+    if (isRunning) return;
+
+    if (!hasActiveCourse) {
+      setStatus("먼저 코스를 생성하거나 선택해야 합니다.");
+      setActivePanel("setup");
+      setSetupView("main");
+      return;
+    }
+
+    setIsRunSettingsOpen(true);
+  }
+
+  function handleConfirmStartRace() {
+    setIsRunSettingsOpen(false);
+    handleStartRace();
+  }
+
   function handleStartRace() {
+    setIsRunSettingsOpen(false);
     if (!isMapLoaded) return;
 
     if (!hasActiveCourse) {
@@ -2992,6 +3012,8 @@ export default function RaceMap() {
   }
 
   function handleResetRace() {
+    setIsRunSettingsOpen(false);
+
     if (animationFrameRef.current !== null) {
       cancelAnimationFrame(animationFrameRef.current);
     }
@@ -3115,6 +3137,197 @@ export default function RaceMap() {
         </div>
       )}
 
+      {isRunSettingsOpen && (
+        <div
+          className="run-settings-backdrop"
+          onClick={() => setIsRunSettingsOpen(false)}
+        >
+          <div
+            className="run-settings-panel"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-lg font-black text-slate-900">
+                  러닝 설정
+                </div>
+                <div className="mt-1 text-xs text-slate-500">
+                  GPS로 실제 러닝을 기록하거나, 페이스 입력으로 테스트할 수 있습니다.
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsRunSettingsOpen(false)}
+                className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700"
+              >
+                닫기
+              </button>
+            </div>
+
+            <div className="mt-3 rounded-xl bg-slate-50 p-3 text-xs text-slate-700">
+              <div className="font-bold text-slate-900">{activeCourse.name}</div>
+              <div className="mt-1">길이 {(courseLengthM / 1000).toFixed(2)} km</div>
+              {activeCourseTurnaround && (
+                <div className="mt-1 text-orange-700">
+                  반환점: {formatPoint(activeCourseTurnaround)}
+                </div>
+              )}
+            </div>
+
+            <label className="mt-3 block space-y-1">
+              <div className="text-xs font-semibold text-slate-600">닉네임</div>
+              <input
+                value={playerName}
+                onChange={(event) => setPlayerName(event.target.value)}
+                disabled={isRunning}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 disabled:bg-slate-100"
+              />
+            </label>
+
+            <div className="mt-3">
+              <div className="mb-2 text-xs font-semibold text-slate-600">
+                기록 방식
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPlayerMode("gps")}
+                  disabled={isRunning}
+                  className={`rounded-xl px-3 py-3 text-sm font-bold ${
+                    playerMode === "gps"
+                      ? "bg-orange-600 text-white"
+                      : "bg-slate-100 text-slate-700"
+                  } disabled:cursor-not-allowed disabled:opacity-60`}
+                >
+                  GPS로 실제 달리기
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setPlayerMode("pace")}
+                  disabled={isRunning}
+                  className={`rounded-xl px-3 py-3 text-sm font-bold ${
+                    playerMode === "pace"
+                      ? "bg-green-600 text-white"
+                      : "bg-slate-100 text-slate-700"
+                  } disabled:cursor-not-allowed disabled:opacity-60`}
+                >
+                  페이스 입력 테스트
+                </button>
+              </div>
+
+              {playerMode === "gps" ? (
+                <div className="mt-2 rounded-lg bg-orange-50 p-2 text-xs text-orange-900">
+                  {isGpsBlockedBySecurity ? (
+                    <div className="font-semibold text-red-700">
+                      GPS는 HTTPS 배포 주소 또는 localhost에서만 사용할 수 있습니다.
+                    </div>
+                  ) : (
+                    <div>
+                      현재 위치 기반으로 실제 진행 거리와 페이스를 계산합니다.
+                    </div>
+                  )}
+                  <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+                    <div>GPS 상태: {getGpsStatusLabel(gpsTracker.status)}</div>
+                    <div>정확도: {gpsAccuracyText}</div>
+                    <div>GPS 거리: {gpsDistanceText}</div>
+                    <div>코스 이탈: {gpsOffCourseText}</div>
+                  </div>
+                </div>
+              ) : (
+                <label className="mt-2 block space-y-1 rounded-lg bg-green-50 p-2">
+                  <div className="text-xs font-semibold text-green-900">
+                    테스트용 내 페이스
+                  </div>
+                  <input
+                    value={paceInput}
+                    onChange={(event) => setPaceInput(event.target.value)}
+                    disabled={isRunning}
+                    placeholder="5:30"
+                    className="w-full rounded-lg border border-green-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-green-500 disabled:bg-slate-100"
+                  />
+                  <div className="text-[11px] text-green-800">
+                    입력 페이스: {formatPace(playerPaceSecPerKm)}
+                  </div>
+                </label>
+              )}
+            </div>
+
+            <div className="mt-3">
+              <div className="mb-2 text-xs font-semibold text-slate-600">
+                가상 페이스메이커
+              </div>
+              <div className="grid grid-cols-1 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedBotIds([])}
+                  disabled={isRunning}
+                  className={`rounded-xl px-3 py-3 text-left text-sm font-semibold ${
+                    selectedBotIds.length === 0
+                      ? "bg-slate-900 text-white"
+                      : "bg-slate-100 text-slate-700"
+                  } disabled:cursor-not-allowed disabled:opacity-60`}
+                >
+                  없음 · 혼자 달리기
+                </button>
+
+                {DEFAULT_BOTS.map((bot) => {
+                  const selected = selectedBotIds.includes(bot.id);
+
+                  return (
+                    <button
+                      key={bot.id}
+                      type="button"
+                      onClick={() => setSelectedBotIds([bot.id])}
+                      disabled={isRunning}
+                      className={`rounded-xl px-3 py-3 text-left text-sm font-semibold ${
+                        selected
+                          ? "bg-blue-600 text-white"
+                          : "bg-white text-slate-800 ring-1 ring-slate-200"
+                      } disabled:cursor-not-allowed disabled:opacity-60`}
+                    >
+                      <span className="block">{bot.name}</span>
+                      <span
+                        className={`block text-xs ${
+                          selected ? "text-blue-100" : "text-slate-500"
+                        }`}
+                      >
+                        {formatPace(bot.paceSecPerKm)} 페이스메이커
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setIsRunSettingsOpen(false)}
+                className="rounded-xl bg-slate-100 px-3 py-3 text-sm font-bold text-slate-700"
+              >
+                취소
+              </button>
+
+              <button
+                type="button"
+                onClick={handleConfirmStartRace}
+                disabled={
+                  !isMapLoaded ||
+                  isRunning ||
+                  !hasActiveCourse ||
+                  (playerMode === "gps" && isGpsBlockedBySecurity)
+                }
+                className="rounded-xl bg-blue-600 px-3 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                러닝 시작
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {activePanel === "setup" && setupView === "main" && (
         <div className="race-panel race-setup-panel">
           {error ? (
@@ -3132,9 +3345,6 @@ export default function RaceMap() {
                 </div>
                 <div className="mt-1 text-sm font-medium text-slate-200">
                   현재 위치에서 바로 뛸 수 있는 3K·5K·10K 러닝 코스를 찾아드립니다.
-                </div>
-                <div className="mt-3 rounded-xl bg-white/10 px-3 py-2 text-xs text-slate-200">
-                  {status}
                 </div>
               </div>
 
@@ -3274,180 +3484,32 @@ export default function RaceMap() {
                 )}
               </div>
 
-              <div className="rounded-xl border border-slate-200 bg-white p-3">
-                <div className="mb-2 text-sm font-semibold text-slate-900">
-                  플레이어 설정
+              <div className="rounded-xl border border-blue-100 bg-blue-50 p-3">
+                <div className="text-sm font-bold text-slate-900">
+                  러닝 준비
+                </div>
+                <div className="mt-1 text-xs text-slate-600">
+                  코스를 고른 뒤 GPS 기록 방식과 가상 페이스메이커를 선택하고 시작하세요.
                 </div>
 
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <label className="space-y-1">
-                    <div className="text-xs font-medium text-slate-600">
-                      닉네임
-                    </div>
-                    <input
-                      value={playerName}
-                      onChange={(event) => setPlayerName(event.target.value)}
-                      disabled={isRunning}
-                      className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 disabled:bg-slate-100"
-                    />
-                  </label>
-
-                  <label className="space-y-1">
-                    <div className="text-xs font-medium text-slate-600">
-                      내 페이스
-                    </div>
-                    <input
-                      value={paceInput}
-                      onChange={(event) => setPaceInput(event.target.value)}
-                      disabled={isRunning || playerMode === "gps"}
-                      placeholder="5:30"
-                      className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 disabled:bg-slate-100"
-                    />
-                  </label>
-                </div>
-
-                <div className="mt-3 grid grid-cols-2 gap-2">
+                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <button
                     type="button"
-                    onClick={() => setPlayerMode("pace")}
-                    disabled={isRunning}
-                    className={`rounded-lg px-3 py-2 text-sm font-semibold ${
-                      playerMode === "pace"
-                        ? "bg-green-600 text-white"
-                        : "bg-slate-100 text-slate-700"
-                    } disabled:cursor-not-allowed disabled:opacity-60`}
+                    onClick={handleOpenRunSettings}
+                    disabled={!isMapLoaded || isRunning || !hasActiveCourse}
+                    className="rounded-xl bg-blue-600 px-3 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
                   >
-                    페이스 입력
+                    이 코스로 달리기
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => setPlayerMode("gps")}
-                    disabled={isRunning}
-                    className={`rounded-lg px-3 py-2 text-sm font-semibold ${
-                      playerMode === "gps"
-                        ? "bg-orange-600 text-white"
-                        : "bg-slate-100 text-slate-700"
-                    } disabled:cursor-not-allowed disabled:opacity-60`}
+                    onClick={handleResetRace}
+                    className="rounded-xl bg-white px-3 py-3 text-sm font-semibold text-slate-800 shadow-sm ring-1 ring-slate-200"
                   >
-                    GPS Beta
+                    기록 초기화
                   </button>
                 </div>
-
-                <div className="mt-3 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
-                  {playerMode === "pace" ? (
-                    <>
-                      입력 페이스:{" "}
-                      <span className="font-semibold text-slate-900">
-                        {formatPace(playerPaceSecPerKm)}
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      GPS 모드:{" "}
-                      <span className="font-semibold text-orange-700">
-                        실제 위치 기반
-                      </span>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {playerMode === "gps" && (
-                <div className="rounded-xl border border-orange-200 bg-orange-50 p-3 text-xs text-orange-900">
-                  <div className="mb-1 text-sm font-semibold">
-                    GPS Beta 상태
-                  </div>
-
-                  {isGpsBlockedBySecurity && (
-                    <div className="mb-2 rounded-lg bg-red-100 p-2 text-red-700">
-                      현재 주소는 보안 컨텍스트가 아닙니다. 모바일 GPS
-                      권한 요청은 HTTPS 배포 주소에서 테스트해야 합니다.
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-                    <div>상태: {getGpsStatusLabel(gpsTracker.status)}</div>
-                    <div>정확도: {gpsAccuracyText}</div>
-                    <div>GPS 거리: {gpsDistanceText}</div>
-                    <div>코스 이탈: {gpsOffCourseText}</div>
-                    <div>수락 샘플: {gpsTracker.acceptedSamples}</div>
-                    <div>거부 샘플: {gpsTracker.rejectedSamples}</div>
-                  </div>
-
-                  {gpsTracker.error && (
-                    <div className="mt-1 text-red-600">{gpsTracker.error}</div>
-                  )}
-
-                  {gpsTracker.lastRejectedReason && (
-                    <div className="mt-1 text-red-600">
-                      {gpsTracker.lastRejectedReason}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className="rounded-xl border border-slate-200 bg-white p-3">
-                <div className="mb-2 text-sm font-semibold text-slate-900">
-                  봇 선택
-                </div>
-
-                <div className="space-y-1">
-                  {DEFAULT_BOTS.map((bot) => {
-                    const checked = selectedBotIds.includes(bot.id);
-
-                    return (
-                      <label
-                        key={bot.id}
-                        className={`flex cursor-pointer items-center justify-between rounded-lg border px-2 py-2 text-sm ${
-                          checked
-                            ? "border-blue-300 bg-blue-50"
-                            : "border-slate-200 bg-white"
-                        } ${isRunning ? "cursor-not-allowed opacity-60" : ""}`}
-                      >
-                        <span className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            disabled={isRunning}
-                            onChange={() => handleToggleBot(bot.id)}
-                          />
-                          <span className="font-medium text-slate-800">
-                            {bot.name}
-                          </span>
-                        </span>
-
-                        <span className="text-xs text-slate-500">
-                          {formatPace(bot.paceSecPerKm)}
-                        </span>
-                      </label>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={handleStartRace}
-                  disabled={
-                    !isMapLoaded ||
-                    isRunning ||
-                    isGpsBlockedBySecurity ||
-                    !hasActiveCourse
-                  }
-                  className="rounded-xl bg-blue-600 px-3 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
-                >
-                  Start Race
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleResetRace}
-                  className="rounded-xl bg-slate-800 px-3 py-3 font-semibold text-white"
-                >
-                  Reset
-                </button>
               </div>
 
               <button
@@ -4130,16 +4192,11 @@ export default function RaceMap() {
           <div className="mt-3 grid grid-cols-2 gap-2">
             <button
               type="button"
-              onClick={handleStartRace}
-              disabled={
-                !isMapLoaded ||
-                isRunning ||
-                isGpsBlockedBySecurity ||
-                !hasActiveCourse
-              }
+              onClick={handleOpenRunSettings}
+              disabled={!isMapLoaded || isRunning || !hasActiveCourse}
               className="rounded-xl bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
             >
-              Start
+              이 코스로 달리기
             </button>
 
             <button
@@ -4321,6 +4378,29 @@ export default function RaceMap() {
           background: rgba(254, 242, 242, 0.96);
         }
 
+        .run-settings-backdrop {
+          position: absolute;
+          inset: 0;
+          z-index: 70;
+          display: flex;
+          align-items: flex-end;
+          justify-content: center;
+          background: rgba(15, 23, 42, 0.36);
+          padding: 12px 10px max(10px, env(safe-area-inset-bottom)) 10px;
+        }
+
+        .run-settings-panel {
+          width: 100%;
+          max-width: 560px;
+          max-height: min(84vh, 680px);
+          overflow-y: auto;
+          border-radius: 24px 24px 18px 18px;
+          background: rgba(255, 255, 255, 0.98);
+          padding: 14px;
+          box-shadow: 0 24px 70px rgba(15, 23, 42, 0.34);
+          -webkit-overflow-scrolling: touch;
+        }
+
         .custom-guide-toast {
           position: absolute;
           z-index: 60;
@@ -4472,6 +4552,17 @@ export default function RaceMap() {
 
           .race-runner-list {
             max-height: min(330px, calc(100dvh - 365px));
+  
+
+          .run-settings-backdrop {
+            align-items: center;
+            padding: 24px;
+          }
+
+          .run-settings-panel {
+            width: 430px;
+            max-height: calc(100dvh - 48px);
+            border-radius: 24px;
           }
         }
 
