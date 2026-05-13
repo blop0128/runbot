@@ -20,6 +20,7 @@ import {
 type PlayerMode = "pace" | "gps";
 type ActivePanel = "setup" | "map";
 type SetupView = "main" | "myCourses";
+type CandidateMode = "outAndBack" | "oneWay";
 type CustomPointStep = "start" | "turnaround" | "finish";
 type CustomGuide =
   | "select-start"
@@ -79,14 +80,27 @@ type TerrainQueryableMap = mapboxgl.Map & {
   ) => number | null;
 };
 
+type DirectionsRoute = {
+  distance: number;
+  geometry: {
+    coordinates: LngLat[];
+  };
+};
+
+type DirectionsResponse = {
+  code?: string;
+  routes?: DirectionsRoute[];
+  message?: string;
+};
+
 const INITIAL_SELECTED_BOT_IDS = ["bot_600", "bot_500", "bot_400"];
 const SAVED_COURSES_STORAGE_KEY = "runbot:savedCourses:v1";
 const AUTO_LOOP_PAGE_SIZE = 5;
 const AUTO_LOOP_COLORS = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#3b82f6"];
-
-const COURSE_ARROW_SYMBOL = "➤";
-const ACTIVE_COURSE_ARROW_INTERVAL_M = 95;
-const PREVIEW_COURSE_ARROW_INTERVAL_M = 85;
+const DEFAULT_DISTANCE_TOLERANCE_M = 500;
+const MAX_ONE_WAY_CANDIDATES_TO_RETURN = 30;
+const EARTH_RADIUS_M = 6_371_000;
+const DIRECTIONS_PROFILE = "mapbox/walking";
 
 const DEFAULT_CENTER: LngLat = [126.9205, 37.5297];
 
@@ -115,73 +129,255 @@ function toDegrees(radians: number): number {
   return (radians * 180) / Math.PI;
 }
 
-function getBearingDegrees(from: LngLat, to: LngLat): number {
-  const [fromLng, fromLat] = from;
-  const [toLng, toLat] = to;
-
-  const lat1 = toRadians(fromLat);
-  const lat2 = toRadians(toLat);
-  const deltaLng = toRadians(toLng - fromLng);
-
-  const y = Math.sin(deltaLng) * Math.cos(lat2);
-  const x =
-    Math.cos(lat1) * Math.sin(lat2) -
-    Math.sin(lat1) * Math.cos(lat2) * Math.cos(deltaLng);
-
-  return (toDegrees(Math.atan2(y, x)) + 360) % 360;
+function normalizeLng(lng: number): number {
+  return ((((lng + 180) % 360) + 360) % 360) - 180;
 }
 
-function makeEmptyPointFeatureCollection(): GeoJSON.FeatureCollection<GeoJSON.Point> {
-  return {
-    type: "FeatureCollection",
-    features: [],
-  };
+function roundCoord(value: number): number {
+  return Number(value.toFixed(6));
 }
 
-function makeCourseArrowGeoJson(
-  polyline: LngLat[],
-  intervalM = 100
-): GeoJSON.FeatureCollection<GeoJSON.Point> {
-  const totalDistanceM = getPolylineLengthM(polyline);
+function roundPoint(point: LngLat): LngLat {
+  return [roundCoord(point[0]), roundCoord(point[1])];
+}
 
-  if (polyline.length < 2 || totalDistanceM <= 10) {
-    return makeEmptyPointFeatureCollection();
-  }
+function haversineDistanceM(a: LngLat, b: LngLat): number {
+  const [lng1, lat1] = a;
+  const [lng2, lat2] = b;
 
-  const features: GeoJSON.Feature<GeoJSON.Point>[] = [];
-  const startDistanceM = Math.min(intervalM * 0.6, totalDistanceM * 0.2);
-  const endDistanceM = Math.max(totalDistanceM - 12, 0);
+  const phi1 = toRadians(lat1);
+  const phi2 = toRadians(lat2);
+  const deltaPhi = toRadians(lat2 - lat1);
+  const deltaLambda = toRadians(lng2 - lng1);
 
-  for (
-    let distanceM = startDistanceM;
-    distanceM < endDistanceM;
-    distanceM += intervalM
-  ) {
-    const point = getLngLatAtDistance(polyline, distanceM);
-    const nextPoint = getLngLatAtDistance(
-      polyline,
-      Math.min(distanceM + 12, totalDistanceM)
+  const sinHalfPhi = Math.sin(deltaPhi / 2);
+  const sinHalfLambda = Math.sin(deltaLambda / 2);
+
+  const h =
+    sinHalfPhi * sinHalfPhi +
+    Math.cos(phi1) * Math.cos(phi2) * sinHalfLambda * sinHalfLambda;
+
+  return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(h));
+}
+
+function destinationPoint(
+  origin: LngLat,
+  distanceM: number,
+  bearingDeg: number
+): LngLat {
+  const [lng, lat] = origin;
+
+  const angularDistance = distanceM / EARTH_RADIUS_M;
+  const bearing = toRadians(bearingDeg);
+
+  const phi1 = toRadians(lat);
+  const lambda1 = toRadians(lng);
+
+  const sinPhi1 = Math.sin(phi1);
+  const cosPhi1 = Math.cos(phi1);
+  const sinAngularDistance = Math.sin(angularDistance);
+  const cosAngularDistance = Math.cos(angularDistance);
+
+  const phi2 = Math.asin(
+    sinPhi1 * cosAngularDistance +
+      cosPhi1 * sinAngularDistance * Math.cos(bearing)
+  );
+
+  const lambda2 =
+    lambda1 +
+    Math.atan2(
+      Math.sin(bearing) * sinAngularDistance * cosPhi1,
+      cosAngularDistance - sinPhi1 * Math.sin(phi2)
     );
 
-    const bearing = getBearingDegrees(point, nextPoint);
+  return roundPoint([normalizeLng(toDegrees(lambda2)), toDegrees(phi2)]);
+}
 
-    features.push({
-      type: "Feature",
-      properties: {
-        bearing,
-        rotation: (bearing - 90 + 360) % 360,
-      },
-      geometry: {
-        type: "Point",
-        coordinates: point,
-      },
-    });
+function removeConsecutiveDuplicatePoints(polyline: LngLat[]): LngLat[] {
+  const result: LngLat[] = [];
+
+  polyline.forEach((point) => {
+    const previous = result[result.length - 1];
+
+    if (!previous) {
+      result.push(point);
+      return;
+    }
+
+    if (
+      Math.abs(previous[0] - point[0]) > 0.000001 ||
+      Math.abs(previous[1] - point[1]) > 0.000001
+    ) {
+      result.push(point);
+    }
+  });
+
+  return result;
+}
+
+function makeDirectionsUrl(points: LngLat[], token: string): string {
+  const coordinates = points
+    .map((point) => `${point[0]},${point[1]}`)
+    .join(";");
+
+  const params = new URLSearchParams({
+    access_token: token,
+    geometries: "geojson",
+    overview: "full",
+    steps: "false",
+    alternatives: "false",
+  });
+
+  return `https://api.mapbox.com/directions/v5/${DIRECTIONS_PROFILE}/${coordinates}?${params.toString()}`;
+}
+
+async function fetchWalkingRoute(points: LngLat[], token: string): Promise<{
+  distanceM: number;
+  polyline: LngLat[];
+}> {
+  const response = await fetch(makeDirectionsUrl(points, token));
+
+  if (!response.ok) {
+    throw new Error(`Mapbox Directions 요청 실패: HTTP ${response.status}`);
   }
 
+  const data = (await response.json()) as DirectionsResponse;
+
+  if (data.code !== "Ok" || !data.routes || data.routes.length === 0) {
+    throw new Error(data.message || "보행 경로를 찾지 못했습니다.");
+  }
+
+  const route = data.routes[0];
+
   return {
-    type: "FeatureCollection",
-    features,
+    distanceM: route.distance,
+    polyline: removeConsecutiveDuplicatePoints(route.geometry.coordinates),
   };
+}
+
+function getBearingCandidates(): number[] {
+  return [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
+}
+
+function getOneWayEndpointRadiiM(
+  targetDistanceM: number,
+  toleranceM: number
+): number[] {
+  const minRadius = Math.max(250, targetDistanceM - toleranceM);
+  const maxRadius = Math.max(minRadius, targetDistanceM + toleranceM);
+
+  const candidates = [
+    targetDistanceM,
+    targetDistanceM - 500,
+    targetDistanceM + 500,
+    targetDistanceM - 250,
+    targetDistanceM + 250,
+    targetDistanceM - 100,
+    targetDistanceM + 100,
+  ]
+    .map((value) => Math.max(250, value))
+    .filter((value) => value >= minRadius && value <= maxRadius);
+
+  return Array.from(new Set(candidates.map((value) => Math.round(value))));
+}
+
+function makeCandidateKey(endpoint: LngLat): string {
+  return `${endpoint[0].toFixed(5)},${endpoint[1].toFixed(5)}`;
+}
+
+async function generateOneWayCourseCandidates({
+  origin,
+  token,
+  targetDistanceM,
+  toleranceM = DEFAULT_DISTANCE_TOLERANCE_M,
+}: {
+  origin: LngLat;
+  token: string;
+  targetDistanceM: number;
+  toleranceM?: number;
+}): Promise<AutoLoopCourseCandidate[]> {
+  if (!token) {
+    throw new Error("Mapbox token이 없습니다.");
+  }
+
+  if (!Number.isFinite(targetDistanceM) || targetDistanceM <= 0) {
+    throw new Error("목표 거리가 올바르지 않습니다.");
+  }
+
+  const bearings = getBearingCandidates();
+  const radii = getOneWayEndpointRadiiM(targetDistanceM, toleranceM);
+  const seen = new Set<string>();
+  const candidates: AutoLoopCourseCandidate[] = [];
+
+  const attempts: Array<{
+    bearingDeg: number;
+    radiusM: number;
+    endpoint: LngLat;
+  }> = [];
+
+  bearings.forEach((bearingDeg) => {
+    radii.forEach((radiusM) => {
+      attempts.push({
+        bearingDeg,
+        radiusM,
+        endpoint: destinationPoint(origin, radiusM, bearingDeg),
+      });
+    });
+  });
+
+  for (const attempt of attempts) {
+    const key = makeCandidateKey(attempt.endpoint);
+
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    try {
+      const route = await fetchWalkingRoute([origin, attempt.endpoint], token);
+
+      if (route.polyline.length < 2 || route.distanceM <= 0) {
+        continue;
+      }
+
+      const distanceErrorM = Math.abs(route.distanceM - targetDistanceM);
+
+      candidates.push({
+        id: `one-way-${attempt.bearingDeg}-${Math.round(attempt.radiusM)}`,
+        candidateId: `one-way-${attempt.bearingDeg}-${Math.round(
+          attempt.radiusM
+        )}`,
+        name: `편도 후보 ${candidates.length + 1}`,
+        distanceM: route.distanceM,
+        distanceErrorM,
+        isWithinTolerance: distanceErrorM <= toleranceM,
+        bearingDeg: attempt.bearingDeg,
+        endpoint: attempt.endpoint,
+        straightDistanceM: haversineDistanceM(origin, attempt.endpoint),
+        outboundDistanceM: route.distanceM,
+        polyline: route.polyline,
+      });
+    } catch (error) {
+      console.warn("Failed to generate one-way candidate:", {
+        attempt,
+        error,
+      });
+    }
+  }
+
+  return candidates
+    .sort((a, b) => {
+      if (a.isWithinTolerance !== b.isWithinTolerance) {
+        return a.isWithinTolerance ? -1 : 1;
+      }
+
+      return a.distanceErrorM - b.distanceErrorM;
+    })
+    .slice(0, MAX_ONE_WAY_CANDIDATES_TO_RETURN)
+    .map((candidate, index) => ({
+      ...candidate,
+      id: `one-way-candidate-${index + 1}`,
+      candidateId: `one-way-candidate-${index + 1}`,
+      name: `편도 후보 ${index + 1}`,
+    }));
 }
 
 function parsePaceInput(input: string): number {
@@ -280,6 +476,45 @@ function createCurrentLocationMarkerElement() {
   return wrapper;
 }
 
+function createTurnaroundMarkerElement(label: string, color: string) {
+  const wrapper = document.createElement("div");
+  wrapper.style.display = "flex";
+  wrapper.style.flexDirection = "column";
+  wrapper.style.alignItems = "center";
+  wrapper.style.gap = "2px";
+
+  const dot = document.createElement("div");
+  dot.className = "turnaround-point-dot";
+  dot.textContent = "↩";
+  dot.style.width = "36px";
+  dot.style.height = "36px";
+  dot.style.borderRadius = "9999px";
+  dot.style.background = color;
+  dot.style.color = "white";
+  dot.style.display = "flex";
+  dot.style.alignItems = "center";
+  dot.style.justifyContent = "center";
+  dot.style.fontSize = "18px";
+  dot.style.fontWeight = "900";
+  dot.style.border = "2px solid white";
+  dot.style.boxShadow = "0 4px 12px rgba(15, 23, 42, 0.28)";
+
+  const text = document.createElement("div");
+  text.textContent = label;
+  text.style.background = "rgba(15, 23, 42, 0.92)";
+  text.style.color = "white";
+  text.style.padding = "2px 7px";
+  text.style.borderRadius = "9999px";
+  text.style.fontSize = "11px";
+  text.style.fontWeight = "800";
+  text.style.whiteSpace = "nowrap";
+
+  wrapper.appendChild(dot);
+  wrapper.appendChild(text);
+
+  return wrapper;
+}
+
 function getGpsStatusLabel(status: string): string {
   if (status === "idle") return "대기";
   if (status === "requesting") return "GPS 요청 중";
@@ -358,6 +593,10 @@ function makeAutoLoopCandidateGeoJson(candidate: AutoLoopCourseCandidate | null)
 
 function getAutoLoopCandidateColor(index: number): string {
   return AUTO_LOOP_COLORS[index % AUTO_LOOP_COLORS.length];
+}
+
+function getCandidateModeLabel(mode: CandidateMode): string {
+  return mode === "oneWay" ? "편도" : "왕복";
 }
 
 function formatPoint(point: LngLat | null): string {
@@ -558,6 +797,8 @@ export default function RaceMap() {
   const finishMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const playerMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const currentLocationMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const activeTurnaroundMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const previewTurnaroundMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const botMarkerRefs = useRef<Record<string, mapboxgl.Marker>>({});
   const customPointMarkerRefs = useRef<
     Partial<Record<CustomPointStep, mapboxgl.Marker>>
@@ -574,6 +815,10 @@ export default function RaceMap() {
   const [isAutoLoopPanelCollapsed, setIsAutoLoopPanelCollapsed] = useState(false);
 
   const [activeCourse, setActiveCourse] = useState<Course>(DEFAULT_COURSE);
+  const [activeCourseMode, setActiveCourseMode] = useState<CandidateMode | "custom" | "saved" | null>(null);
+  const [activeCourseTurnaround, setActiveCourseTurnaround] = useState<LngLat | null>(null);
+  const [candidateMode, setCandidateMode] = useState<CandidateMode>("outAndBack");
+
   const [savedCourses, setSavedCourses] = useState<SavedCourseRecord[]>([]);
   const [hasLoadedSavedCourses, setHasLoadedSavedCourses] = useState(false);
 
@@ -585,6 +830,7 @@ export default function RaceMap() {
   const [isGeneratingCustomCourse, setIsGeneratingCustomCourse] =
     useState(false);
   const [isGeneratingAutoLoop, setIsGeneratingAutoLoop] = useState(false);
+  const [isGeneratingOneWay, setIsGeneratingOneWay] = useState(false);
   const [autoLoopTargetKm, setAutoLoopTargetKm] = useState("3.0");
   const [autoLoopAllCandidates, setAutoLoopAllCandidates] = useState<
     AutoLoopCourseCandidate[]
@@ -666,6 +912,7 @@ export default function RaceMap() {
 
   const isAutoLoopPanelVisible =
     isGeneratingAutoLoop ||
+    isGeneratingOneWay ||
     autoLoopCandidates.length > 0 ||
     autoLoopError !== null;
 
@@ -746,51 +993,6 @@ export default function RaceMap() {
     });
   }
 
-  function updateCourseArrowSource(course: Course) {
-    const map = mapRef.current;
-    if (!map) return;
-
-    const data = isRunnableCourse(course)
-      ? makeCourseArrowGeoJson(course.polyline, ACTIVE_COURSE_ARROW_INTERVAL_M)
-      : makeEmptyPointFeatureCollection();
-
-    const source = map.getSource("race-course-arrows") as
-      | mapboxgl.GeoJSONSource
-      | undefined;
-
-    if (source) {
-      source.setData(data);
-    } else {
-      map.addSource("race-course-arrows", {
-        type: "geojson",
-        data,
-      });
-    }
-
-    if (!map.getLayer("race-course-arrows-symbol")) {
-      map.addLayer({
-        id: "race-course-arrows-symbol",
-        type: "symbol",
-        source: "race-course-arrows",
-        layout: {
-          "symbol-placement": "point",
-          "text-field": COURSE_ARROW_SYMBOL,
-          "text-size": 17,
-          "text-rotate": ["get", "rotation"] as never,
-          "text-rotation-alignment": "map",
-          "text-pitch-alignment": "map",
-          "text-allow-overlap": true,
-          "text-ignore-placement": true,
-        },
-        paint: {
-          "text-color": "#1d4ed8",
-          "text-halo-color": "#ffffff",
-          "text-halo-width": 1.5,
-        },
-      });
-    }
-  }
-
   function updateCourseSource(course: Course) {
     const map = mapRef.current;
     if (!map || !isRunnableCourse(course)) return;
@@ -823,63 +1025,75 @@ export default function RaceMap() {
         },
       });
     }
-
-    updateCourseArrowSource(course);
   }
 
-  function updateAutoLoopCandidateArrowOverlay(
-    candidate: AutoLoopCourseCandidate | null,
-    color: string
-  ) {
+  function updatePreviewTurnaroundMarker(point: LngLat | null, color: string) {
     const map = mapRef.current;
-    if (!map) return;
 
-    const data = candidate
-      ? makeCourseArrowGeoJson(candidate.polyline, PREVIEW_COURSE_ARROW_INTERVAL_M)
-      : makeEmptyPointFeatureCollection();
-
-    const source = map.getSource("auto-loop-candidate-arrows") as
-      | mapboxgl.GeoJSONSource
-      | undefined;
-
-    if (source) {
-      source.setData(data);
-    } else {
-      map.addSource("auto-loop-candidate-arrows", {
-        type: "geojson",
-        data,
-      });
+    if (!map || !point) {
+      previewTurnaroundMarkerRef.current?.getElement().style.setProperty(
+        "display",
+        "none"
+      );
+      return;
     }
 
-    if (!map.getLayer("auto-loop-candidate-arrows-symbol")) {
-      map.addLayer({
-        id: "auto-loop-candidate-arrows-symbol",
-        type: "symbol",
-        source: "auto-loop-candidate-arrows",
-        layout: {
-          "symbol-placement": "point",
-          "text-field": COURSE_ARROW_SYMBOL,
-          "text-size": 18,
-          "text-rotate": ["get", "rotation"] as never,
-          "text-rotation-alignment": "map",
-          "text-pitch-alignment": "map",
-          "text-allow-overlap": true,
-          "text-ignore-placement": true,
-        },
-        paint: {
-          "text-color": color,
-          "text-halo-color": "#ffffff",
-          "text-halo-width": 1.8,
-        },
-      });
+    if (!previewTurnaroundMarkerRef.current) {
+      previewTurnaroundMarkerRef.current = new mapboxgl.Marker({
+        element: createTurnaroundMarkerElement("반환점", color),
+        anchor: "bottom",
+      })
+        .setLngLat(point)
+        .setPopup(new mapboxgl.Popup().setText("왕복 코스 반환점"))
+        .addTo(map);
     } else {
-      map.setPaintProperty("auto-loop-candidate-arrows-symbol", "text-color", color);
+      previewTurnaroundMarkerRef.current.setLngLat(point);
+      previewTurnaroundMarkerRef.current
+        .getElement()
+        .style.setProperty("display", "flex");
+
+      const dot =
+        previewTurnaroundMarkerRef.current.getElement().querySelector(
+          ".turnaround-point-dot"
+        ) as HTMLDivElement | null;
+
+      if (dot) {
+        dot.style.background = color;
+      }
+    }
+  }
+
+  function updateActiveTurnaroundMarker(point: LngLat | null) {
+    const map = mapRef.current;
+
+    if (!map || !point) {
+      activeTurnaroundMarkerRef.current?.getElement().style.setProperty(
+        "display",
+        "none"
+      );
+      return;
+    }
+
+    if (!activeTurnaroundMarkerRef.current) {
+      activeTurnaroundMarkerRef.current = new mapboxgl.Marker({
+        element: createTurnaroundMarkerElement("반환점", "#f97316"),
+        anchor: "bottom",
+      })
+        .setLngLat(point)
+        .setPopup(new mapboxgl.Popup().setText("왕복 코스 반환점"))
+        .addTo(map);
+    } else {
+      activeTurnaroundMarkerRef.current.setLngLat(point);
+      activeTurnaroundMarkerRef.current
+        .getElement()
+        .style.setProperty("display", "flex");
     }
   }
 
   function updateAutoLoopCandidateOverlay(
     candidate: AutoLoopCourseCandidate | null,
-    color: string
+    color: string,
+    mode: CandidateMode
   ) {
     const map = mapRef.current;
     if (!map) return;
@@ -919,7 +1133,10 @@ export default function RaceMap() {
       map.setPaintProperty("auto-loop-candidates-line", "line-opacity", 0.88);
     }
 
-    updateAutoLoopCandidateArrowOverlay(candidate, color);
+    updatePreviewTurnaroundMarker(
+      mode === "outAndBack" && candidate ? candidate.endpoint : null,
+      color
+    );
   }
 
   function clearAutoLoopCandidateOverlay() {
@@ -934,13 +1151,10 @@ export default function RaceMap() {
       source.setData(makeAutoLoopCandidateGeoJson(null));
     }
 
-    const arrowSource = map.getSource("auto-loop-candidate-arrows") as
-      | mapboxgl.GeoJSONSource
-      | undefined;
-
-    if (arrowSource) {
-      arrowSource.setData(makeEmptyPointFeatureCollection());
-    }
+    previewTurnaroundMarkerRef.current?.getElement().style.setProperty(
+      "display",
+      "none"
+    );
   }
 
   function clearAutoLoopCandidates() {
@@ -1034,12 +1248,13 @@ export default function RaceMap() {
   function previewAutoLoopCandidate(
     candidate: AutoLoopCourseCandidate,
     pageIndex: number,
-    shouldFit = true
+    shouldFit = true,
+    mode: CandidateMode = candidateMode
   ) {
     const color = getAutoLoopCandidateColor(pageIndex);
 
     setAutoLoopPreviewCandidateId(candidate.candidateId);
-    updateAutoLoopCandidateOverlay(candidate, color);
+    updateAutoLoopCandidateOverlay(candidate, color, mode);
 
     if (shouldFit) {
       fitMapToAutoLoopCandidate(candidate);
@@ -1048,7 +1263,8 @@ export default function RaceMap() {
 
   function showAutoLoopCandidatePage(
     allCandidates: AutoLoopCourseCandidate[],
-    startIndex: number
+    startIndex: number,
+    mode: CandidateMode = candidateMode
   ) {
     const nextCandidates = allCandidates.slice(
       startIndex,
@@ -1061,16 +1277,16 @@ export default function RaceMap() {
 
     if (nextCandidates.length === 0) {
       setAutoLoopPreviewCandidateId(null);
-      updateAutoLoopCandidateOverlay(null, "#3b82f6");
-      setStatus("더 이상 표시할 자동 루프 후보가 없습니다.");
+      updateAutoLoopCandidateOverlay(null, "#3b82f6", mode);
+      setStatus(`더 이상 표시할 ${getCandidateModeLabel(mode)} 후보가 없습니다.`);
       return;
     }
 
-    previewAutoLoopCandidate(nextCandidates[0], 0, true);
+    previewAutoLoopCandidate(nextCandidates[0], 0, true, mode);
     computeElevationSummariesForCandidates(nextCandidates);
 
     setStatus(
-      `자동 루프 후보 ${startIndex + 1}~${
+      `${getCandidateModeLabel(mode)} 후보 ${startIndex + 1}~${
         startIndex + nextCandidates.length
       } / ${allCandidates.length} 표시 중`
     );
@@ -1080,6 +1296,8 @@ export default function RaceMap() {
     const hasCourse = isRunnableCourse(course);
     const start = course.polyline[0];
     const finish = course.polyline[course.polyline.length - 1];
+    const finishSameAsStart =
+      hasCourse && start && finish && haversineDistanceM(start, finish) < 10;
 
     startMarkerRef.current?.getElement().style.setProperty(
       "display",
@@ -1088,7 +1306,7 @@ export default function RaceMap() {
 
     finishMarkerRef.current?.getElement().style.setProperty(
       "display",
-      hasCourse ? "block" : "none"
+      hasCourse && !finishSameAsStart ? "block" : "none"
     );
 
     playerMarkerRef.current?.getElement().style.setProperty(
@@ -1272,6 +1490,8 @@ export default function RaceMap() {
 
     setIsCustomCourseMode(false);
     setCustomGuide(null);
+    setActiveCourseTurnaround(null);
+    setActiveCourseMode("saved");
     setActiveCourse(nextCourse);
     setActivePanel("map");
     setSetupView("main");
@@ -1379,18 +1599,22 @@ export default function RaceMap() {
     if (autoLoopAllCandidates.length === 0) return;
 
     if (autoLoopCandidateCursor >= autoLoopAllCandidates.length) {
-      setStatus("더 이상 표시할 자동 루프 후보가 없습니다.");
+      setStatus(`더 이상 표시할 ${getCandidateModeLabel(candidateMode)} 후보가 없습니다.`);
       return;
     }
 
-    showAutoLoopCandidatePage(autoLoopAllCandidates, autoLoopCandidateCursor);
+    showAutoLoopCandidatePage(
+      autoLoopAllCandidates,
+      autoLoopCandidateCursor,
+      candidateMode
+    );
   }
 
   function handlePreviewAutoLoopCandidate(
     candidate: AutoLoopCourseCandidate,
     index: number
   ) {
-    previewAutoLoopCandidate(candidate, index, true);
+    previewAutoLoopCandidate(candidate, index, true, candidateMode);
 
     if (!autoLoopElevationSummaries[candidate.candidateId]) {
       computeElevationSummariesForCandidates([candidate]);
@@ -1400,6 +1624,9 @@ export default function RaceMap() {
   }
 
   function handleApplyAutoLoopCandidate(candidate: AutoLoopCourseCandidate) {
+    const mode = candidateMode;
+    const label = getCandidateModeLabel(mode);
+
     const nextCourse: Course = {
       id: candidate.id,
       name: `${candidate.name} · ${(candidate.distanceM / 1000).toFixed(2)}km`,
@@ -1416,11 +1643,13 @@ export default function RaceMap() {
     setCustomGuide(null);
     setCustomPoints(INITIAL_CUSTOM_POINTS);
     setPlayerMode("gps");
+    setActiveCourseMode(mode);
+    setActiveCourseTurnaround(mode === "outAndBack" ? candidate.endpoint : null);
     setActiveCourse(nextCourse);
     setActivePanel("map");
     setSetupView("main");
     setStatus(
-      `자동 루프 코스 적용 완료 · ${(candidate.distanceM / 1000).toFixed(
+      `${label} 코스 적용 완료 · ${(candidate.distanceM / 1000).toFixed(
         2
       )}km`
     );
@@ -1428,7 +1657,7 @@ export default function RaceMap() {
 
   function handleCloseAutoLoopPanel() {
     clearAutoLoopCandidates();
-    setStatus("자동 루프 후보 보기를 닫았습니다.");
+    setStatus(`${getCandidateModeLabel(candidateMode)} 후보 보기를 닫았습니다.`);
   }
 
   useEffect(() => {
@@ -1603,6 +1832,12 @@ export default function RaceMap() {
       currentLocationMarkerRef.current?.remove();
       currentLocationMarkerRef.current = null;
 
+      activeTurnaroundMarkerRef.current?.remove();
+      activeTurnaroundMarkerRef.current = null;
+
+      previewTurnaroundMarkerRef.current?.remove();
+      previewTurnaroundMarkerRef.current = null;
+
       Object.values(botMarkerRefs.current).forEach((marker) => marker.remove());
       botMarkerRefs.current = {};
 
@@ -1622,6 +1857,9 @@ export default function RaceMap() {
     }
 
     resetMarkersToCourseStart(activeCourse);
+    updateActiveTurnaroundMarker(
+      activeCourseMode === "outAndBack" ? activeCourseTurnaround : null
+    );
 
     setRunnerHud(createInitialHud());
     setElapsedSec(0);
@@ -1630,7 +1868,7 @@ export default function RaceMap() {
 
     // activeCourse 변경 시 지도와 HUD를 확정 동기화
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeCourse, isMapLoaded]);
+  }, [activeCourse, activeCourseTurnaround, activeCourseMode, isMapLoaded]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1938,6 +2176,8 @@ export default function RaceMap() {
       setCustomGuide(null);
       setCustomPointStep("start");
       setCustomPoints(INITIAL_CUSTOM_POINTS);
+      setActiveCourseMode("custom");
+      setActiveCourseTurnaround(null);
       setActiveCourse(nextCourse);
       setActivePanel("map");
       setSetupView("main");
@@ -1959,9 +2199,10 @@ export default function RaceMap() {
     }
   }
 
-  async function handleGenerateAutoLoopCandidates() {
+  async function handleGenerateOutAndBackCandidates() {
     if (isRunning) return;
 
+    setCandidateMode("outAndBack");
     setAutoLoopError(null);
     setGpsActionError(null);
     setCustomCourseError(null);
@@ -1977,7 +2218,7 @@ export default function RaceMap() {
     setSetupView("main");
 
     if (isSecureContextState === false) {
-      setAutoLoopError("자동 루프 코스 생성은 HTTPS 환경에서 테스트해야 합니다.");
+      setAutoLoopError("왕복 코스 생성은 HTTPS 환경에서 테스트해야 합니다.");
       return;
     }
 
@@ -2034,31 +2275,135 @@ export default function RaceMap() {
       setStatus(
         `현재 위치 기준 ${(targetDistanceM / 1000).toFixed(
           1
-        )}km 자동 루프 후보를 찾는 중...`
+        )}km 왕복 후보를 찾는 중...`
       );
 
       const candidates = await generateAutoLoopCourseCandidates({
         origin,
         token,
         targetDistanceM,
-        toleranceM: 500,
+        toleranceM: DEFAULT_DISTANCE_TOLERANCE_M,
       });
 
       if (candidates.length === 0) {
-        setAutoLoopError("생성 가능한 루프 후보를 찾지 못했습니다.");
-        setStatus("자동 루프 후보 없음");
+        setAutoLoopError("생성 가능한 왕복 후보를 찾지 못했습니다.");
+        setStatus("왕복 후보 없음");
         return;
       }
 
       setAutoLoopAllCandidates(candidates);
-      showAutoLoopCandidatePage(candidates, 0);
+      showAutoLoopCandidatePage(candidates, 0, "outAndBack");
     } catch (rawError) {
       const message = getPositionErrorMessage(rawError);
 
       setAutoLoopError(message);
-      setStatus("자동 루프 후보 생성 실패");
+      setStatus("왕복 후보 생성 실패");
     } finally {
       setIsGeneratingAutoLoop(false);
+    }
+  }
+
+  async function handleGenerateOneWayCandidates() {
+    if (isRunning) return;
+
+    setCandidateMode("oneWay");
+    setAutoLoopError(null);
+    setGpsActionError(null);
+    setCustomCourseError(null);
+    setAutoLoopAllCandidates([]);
+    setAutoLoopCandidates([]);
+    setAutoLoopCandidateCursor(0);
+    setAutoLoopPreviewCandidateId(null);
+    setAutoLoopElevationSummaries({});
+    clearAutoLoopCandidateOverlay();
+
+    setIsAutoLoopPanelCollapsed(false);
+    setActivePanel("map");
+    setSetupView("main");
+
+    if (isSecureContextState === false) {
+      setAutoLoopError("편도 코스 생성은 HTTPS 환경에서 테스트해야 합니다.");
+      return;
+    }
+
+    const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+
+    if (!token) {
+      setAutoLoopError("Mapbox token이 없습니다.");
+      return;
+    }
+
+    const targetDistanceM = parseAutoLoopTargetDistanceM();
+
+    if (!Number.isFinite(targetDistanceM) || targetDistanceM <= 0) {
+      setAutoLoopError("목표 거리를 올바르게 입력해 주세요.");
+      return;
+    }
+
+    try {
+      setIsGeneratingOneWay(true);
+      setStatus("현재 위치를 가져오는 중...");
+
+      const position = await getCurrentPosition();
+      const accuracy = position.coords.accuracy;
+
+      if (accuracy > 120) {
+        setAutoLoopError(
+          `현재 위치 정확도가 낮습니다. accuracy=${accuracy.toFixed(
+            1
+          )}m. 야외에서 다시 시도하세요.`
+        );
+        setStatus("현재 위치 정확도 부족");
+        return;
+      }
+
+      const origin: LngLat = [
+        position.coords.longitude,
+        position.coords.latitude,
+      ];
+
+      currentLocationMarkerRef.current?.setLngLat(origin);
+      currentLocationMarkerRef.current?.getElement().style.setProperty(
+        "display",
+        "flex"
+      );
+
+      playerMarkerRef.current?.setLngLat(origin);
+
+      mapRef.current?.flyTo({
+        center: origin,
+        zoom: 15.5,
+        duration: 600,
+      });
+
+      setStatus(
+        `현재 위치 기준 ${(targetDistanceM / 1000).toFixed(
+          1
+        )}km 편도 후보를 찾는 중...`
+      );
+
+      const candidates = await generateOneWayCourseCandidates({
+        origin,
+        token,
+        targetDistanceM,
+        toleranceM: DEFAULT_DISTANCE_TOLERANCE_M,
+      });
+
+      if (candidates.length === 0) {
+        setAutoLoopError("생성 가능한 편도 후보를 찾지 못했습니다.");
+        setStatus("편도 후보 없음");
+        return;
+      }
+
+      setAutoLoopAllCandidates(candidates);
+      showAutoLoopCandidatePage(candidates, 0, "oneWay");
+    } catch (rawError) {
+      const message = getPositionErrorMessage(rawError);
+
+      setAutoLoopError(message);
+      setStatus("편도 후보 생성 실패");
+    } finally {
+      setIsGeneratingOneWay(false);
     }
   }
 
@@ -2085,6 +2430,9 @@ export default function RaceMap() {
 
     clearAutoLoopCandidates();
     resetMarkersToCourseStart(activeCourse);
+    updateActiveTurnaroundMarker(
+      activeCourseMode === "outAndBack" ? activeCourseTurnaround : null
+    );
 
     if (playerMode === "gps") {
       gpsTracker.reset();
@@ -2114,6 +2462,9 @@ export default function RaceMap() {
     latestGpsProjectionRef.current = null;
 
     resetMarkersToCourseStart(activeCourse);
+    updateActiveTurnaroundMarker(
+      activeCourseMode === "outAndBack" ? activeCourseTurnaround : null
+    );
 
     setIsRunning(false);
     setStartTimeMs(null);
@@ -2150,6 +2501,9 @@ export default function RaceMap() {
 
   const isGpsBlockedBySecurity =
     playerMode === "gps" && isSecureContextState === false;
+
+  const isGeneratingAnyCourse = isGeneratingAutoLoop || isGeneratingOneWay;
+  const candidateModeLabel = getCandidateModeLabel(candidateMode);
 
   return (
     <div className="race-root">
@@ -2235,48 +2589,62 @@ export default function RaceMap() {
                         {activeCourse.name}
                       </div>
                       <div>길이: {(courseLengthM / 1000).toFixed(2)} km</div>
+                      {activeCourseMode === "outAndBack" && activeCourseTurnaround && (
+                        <div className="mt-1 text-orange-700">
+                          왕복 반환점: {formatPoint(activeCourseTurnaround)}
+                        </div>
+                      )}
                     </>
                   ) : (
                     <>
                       <div className="font-semibold text-slate-900">
                         아직 선택된 코스가 없습니다.
                       </div>
-                      <div>자동 루프 후보 또는 커스텀 코스를 먼저 선택하세요.</div>
+                      <div>왕복 후보, 편도 후보 또는 커스텀 코스를 먼저 선택하세요.</div>
                     </>
                   )}
                 </div>
 
                 <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-2">
                   <div className="mb-2 text-xs font-semibold text-slate-700">
-                    현재 위치 기준 자동 루프
+                    현재 위치 기준 코스 생성
                   </div>
 
-                  <div className="grid grid-cols-[1fr_auto] gap-2">
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-slate-500">
-                        목표 거리 km
-                      </div>
-                      <input
-                        value={autoLoopTargetKm}
-                        onChange={(event) => setAutoLoopTargetKm(event.target.value)}
-                        disabled={isRunning || isGeneratingAutoLoop}
-                        inputMode="decimal"
-                        className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 disabled:bg-slate-100"
-                      />
-                    </label>
+                  <label className="space-y-1">
+                    <div className="text-[11px] font-medium text-slate-500">
+                      목표 거리 km
+                    </div>
+                    <input
+                      value={autoLoopTargetKm}
+                      onChange={(event) => setAutoLoopTargetKm(event.target.value)}
+                      disabled={isRunning || isGeneratingAnyCourse}
+                      inputMode="decimal"
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 disabled:bg-slate-100"
+                    />
+                  </label>
+
+                  <div className="mt-2 grid grid-cols-1 gap-2">
+                    <button
+                      type="button"
+                      onClick={handleGenerateOutAndBackCandidates}
+                      disabled={isRunning || isGeneratingAnyCourse}
+                      className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                    >
+                      {isGeneratingAutoLoop ? "왕복 탐색 중..." : "왕복 코스 생성"}
+                    </button>
 
                     <button
                       type="button"
-                      onClick={handleGenerateAutoLoopCandidates}
-                      disabled={isRunning || isGeneratingAutoLoop}
-                      className="self-end rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                      onClick={handleGenerateOneWayCandidates}
+                      disabled={isRunning || isGeneratingAnyCourse}
+                      className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
                     >
-                      {isGeneratingAutoLoop ? "탐색 중..." : "후보 찾기"}
+                      {isGeneratingOneWay ? "편도 탐색 중..." : "편도 코스 생성"}
                     </button>
                   </div>
 
                   <div className="mt-2 text-[11px] text-slate-500">
-                    후보 찾기를 누르면 지도 화면에서 5개 후보를 하나씩 미리볼 수 있습니다.
+                    왕복은 편도 끝지점까지 갔다가 같은 길로 돌아옵니다. 편도는 목표 거리만큼 한 방향으로 이동하는 후보를 찾습니다.
                   </div>
                 </div>
 
@@ -2597,7 +2965,7 @@ export default function RaceMap() {
           <div className="mb-2 flex items-start justify-between gap-3">
             <div>
               <div className="text-sm font-bold text-slate-900">
-                자동 루프 후보
+                {candidateModeLabel} 후보
               </div>
               <div className="text-xs text-slate-500">{status}</div>
               {isAutoLoopPanelCollapsed && previewingAutoLoopCandidate && (
@@ -2629,9 +2997,9 @@ export default function RaceMap() {
 
           {!isAutoLoopPanelCollapsed && (
             <>
-              {isGeneratingAutoLoop && (
+              {isGeneratingAnyCourse && (
                 <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
-                  현재 위치와 주변 보행 경로를 기준으로 후보를 탐색 중입니다.
+                  현재 위치와 주변 보행 경로를 기준으로 {candidateModeLabel} 후보를 탐색 중입니다.
                 </div>
               )}
 
@@ -2686,6 +3054,12 @@ export default function RaceMap() {
                               거리 {(candidate.distanceM / 1000).toFixed(2)}km · 오차{" "}
                               {(candidate.distanceErrorM / 1000).toFixed(2)}km
                             </div>
+
+                            {candidateMode === "outAndBack" && (
+                              <div className="text-[11px] text-orange-700">
+                                편도 끝 반환점: {formatPoint(candidate.endpoint)}
+                              </div>
+                            )}
 
                             <div className="text-[11px] text-slate-500">
                               {candidate.isWithinTolerance
@@ -2946,6 +3320,12 @@ export default function RaceMap() {
                 Course: {activeCourse.name} · length:{" "}
                 {(courseLengthM / 1000).toFixed(2)} km
               </div>
+
+              {activeCourseMode === "outAndBack" && activeCourseTurnaround && (
+                <div className="mt-1 rounded-lg bg-orange-50 p-2 text-xs font-medium text-orange-700">
+                  반환점: {formatPoint(activeCourseTurnaround)}
+                </div>
+              )}
 
               <div className="race-runner-list mt-2 space-y-2 overflow-y-auto">
                 {sortedHud.map((runner, index) => (
