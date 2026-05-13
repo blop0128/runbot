@@ -4913,7 +4913,7 @@ export default function RaceMap() {
         body {
           margin: 0;
           padding: 0;
-          background: #f8fafc;
+          background: #0f172a;
         }
 
         .race-root {
@@ -4923,7 +4923,7 @@ export default function RaceMap() {
           height: 100vh;
           height: 100dvh;
           overflow: hidden;
-          background: #f8fafc;
+          background: #0f172a;
         }
 
         .setup-background {
@@ -4951,33 +4951,6 @@ export default function RaceMap() {
           background: #dbeafe;
         }
 
-        .race-top-tabs {
-          position: absolute;
-          z-index: 50;
-          top: max(8px, env(safe-area-inset-top));
-          left: 10px;
-          right: 10px;
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 8px;
-        }
-
-        .race-tab-button {
-          border: 0;
-          border-radius: 14px;
-          padding: 10px 12px;
-          background: rgba(255, 255, 255, 0.95);
-          color: #334155;
-          font-size: 14px;
-          font-weight: 800;
-          box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
-        }
-
-        .race-tab-active {
-          background: #0f172a;
-          color: white;
-        }
-
         .race-panel {
           position: absolute;
           z-index: 40;
@@ -4995,6 +4968,412 @@ export default function RaceMap() {
 
         .race-setup-panel > div {
           position: relative;
+          z-index: 2;
+        }
+
+        .race-top-tabs {
+          position: absolute;
+          z-index: 50;
+          top: max(8px, env(safe-area-inset-top));
+          left: 10px;
+          right: 10px;
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 8px;
+        }
+
+        .race-tab-button {
+          position: relative;
+          overflow: hidden;
+          border: 1px solid rgba(255, 255, 255, 0.32);
+          border-radius: 16px;
+          padding: 10px 12px;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.22),
+              rgba(255, 255, 255, 0.08)
+            );
+          color: rgba(255, 255, 255, 0.92);
+          font-size: 14px;
+          font-weight: 900;
+          backdrop-filter: blur(22px) saturate(160%);
+          -webkit-backdrop-filter: blur(22px) saturate(160%);
+          box-shadow:
+            0 12px 30px rgba(0, 0, 0, 0.18),
+            inset 0 1px 0 rgba(255, 255, 255, 0.24);
+        }
+
+        .race-tab-active {
+          border-color: rgba(255, 255, 255, 0.42);
+          background:
+            linear-gradient(
+              135deg,
+              rgba(16, 18, 24, 0.72),
+              rgba(49, 39, 32, 0.48)
+            );
+          color: white;
+        }
+
+        .liquid-glass,
+        .hero-glass-card,
+        .race-setup-panel .rounded-xl.border,
+        .race-setup-panel .rounded-lg.border,
+        .race-setup-panel .rounded-xl[class*="border"],
+        .race-setup-panel .rounded-lg[class*="border"],
+        .run-settings-panel,
+        .race-map-hud,
+        .race-custom-panel,
+        .race-auto-loop-panel,
+        .custom-guide-toast,
+        .target-distance-popover {
+          position: relative;
+          overflow: hidden;
+          border: 1px solid rgba(255, 255, 255, 0.34) !important;
+          backdrop-filter: blur(24px) saturate(160%);
+          -webkit-backdrop-filter: blur(24px) saturate(160%);
+          box-shadow:
+            0 22px 54px rgba(0, 0, 0, 0.20),
+            inset 0 1px 0 rgba(255, 255, 255, 0.32),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.08) !important;
+        }
+
+        .liquid-glass::before,
+        .hero-glass-card::before,
+        .race-setup-panel .rounded-xl.border::before,
+        .race-setup-panel .rounded-lg.border::before,
+        .race-setup-panel .rounded-xl[class*="border"]::before,
+        .race-setup-panel .rounded-lg[class*="border"]::before,
+        .run-settings-panel::before,
+        .race-map-hud::before,
+        .race-custom-panel::before,
+        .race-auto-loop-panel::before,
+        .custom-guide-toast::before,
+        .target-distance-popover::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: 0;
+          background:
+            radial-gradient(
+              circle at 20% 0%,
+              rgba(255, 255, 255, 0.22),
+              transparent 38%
+            ),
+            linear-gradient(
+              180deg,
+              rgba(255, 255, 255, 0.16),
+              transparent 46%
+            );
+          pointer-events: none;
+        }
+
+        .liquid-glass > *,
+        .hero-glass-card > *,
+        .race-setup-panel .rounded-xl.border > *,
+        .race-setup-panel .rounded-lg.border > *,
+        .race-setup-panel .rounded-xl[class*="border"] > *,
+        .race-setup-panel .rounded-lg[class*="border"] > *,
+        .run-settings-panel > *,
+        .race-map-hud > *,
+        .race-custom-panel > *,
+        .race-auto-loop-panel > *,
+        .custom-guide-toast > *,
+        .target-distance-popover > * {
+          position: relative;
+          z-index: 1;
+        }
+
+        .hero-glass-card {
+          border-color: rgba(255, 255, 255, 0.38) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(16, 18, 24, 0.66),
+              rgba(56, 45, 36, 0.42)
+            ) !important;
+          color: rgba(255, 255, 255, 0.97) !important;
+          backdrop-filter: blur(28px) saturate(165%);
+          -webkit-backdrop-filter: blur(28px) saturate(165%);
+        }
+
+        .race-setup-panel .rounded-xl.border:not(.hero-glass-card),
+        .race-setup-panel .rounded-lg.border:not(.hero-glass-card),
+        .race-setup-panel .rounded-xl[class*="border"]:not(.hero-glass-card),
+        .race-setup-panel .rounded-lg[class*="border"]:not(.hero-glass-card) {
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.34),
+              rgba(255, 255, 255, 0.13)
+            ) !important;
+          color: #0f172a !important;
+        }
+
+        .race-setup-panel .rounded-xl.border:not(.hero-glass-card) .text-slate-950,
+        .race-setup-panel .rounded-xl.border:not(.hero-glass-card) .text-slate-900,
+        .race-setup-panel .rounded-xl.border:not(.hero-glass-card) .text-slate-800,
+        .race-setup-panel .rounded-xl.border:not(.hero-glass-card) .text-slate-700,
+        .race-setup-panel .rounded-lg.border:not(.hero-glass-card) .text-slate-950,
+        .race-setup-panel .rounded-lg.border:not(.hero-glass-card) .text-slate-900,
+        .race-setup-panel .rounded-lg.border:not(.hero-glass-card) .text-slate-800,
+        .race-setup-panel .rounded-lg.border:not(.hero-glass-card) .text-slate-700 {
+          color: #0f172a !important;
+        }
+
+        .race-setup-panel .rounded-xl.border:not(.hero-glass-card) .text-slate-600,
+        .race-setup-panel .rounded-xl.border:not(.hero-glass-card) .text-slate-500,
+        .race-setup-panel .rounded-xl.border:not(.hero-glass-card) .text-slate-400,
+        .race-setup-panel .rounded-lg.border:not(.hero-glass-card) .text-slate-600,
+        .race-setup-panel .rounded-lg.border:not(.hero-glass-card) .text-slate-500,
+        .race-setup-panel .rounded-lg.border:not(.hero-glass-card) .text-slate-400 {
+          color: rgba(51, 65, 85, 0.78) !important;
+        }
+
+        .race-setup-panel .bg-white,
+        .race-setup-panel [class*="bg-white/"],
+        .race-setup-panel .bg-slate-50,
+        .race-setup-panel .bg-slate-100,
+        .race-setup-panel .bg-blue-50,
+        .race-setup-panel .bg-indigo-50,
+        .race-setup-panel .bg-purple-50,
+        .race-setup-panel .bg-violet-50,
+        .race-setup-panel .bg-emerald-50,
+        .race-setup-panel .bg-green-50,
+        .race-setup-panel .bg-orange-50,
+        .race-setup-panel .bg-yellow-50,
+        .race-setup-panel .bg-red-50,
+        .run-settings-panel .bg-white,
+        .run-settings-panel .bg-slate-50,
+        .run-settings-panel .bg-blue-50,
+        .run-settings-panel .bg-orange-50 {
+          border: 1px solid rgba(255, 255, 255, 0.30) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.24),
+              rgba(255, 255, 255, 0.08)
+            ) !important;
+          color: #0f172a !important;
+          backdrop-filter: blur(20px) saturate(150%);
+          -webkit-backdrop-filter: blur(20px) saturate(150%);
+          box-shadow:
+            0 10px 28px rgba(0, 0, 0, 0.10),
+            inset 0 1px 0 rgba(255, 255, 255, 0.30) !important;
+        }
+
+        .race-setup-panel input,
+        .run-settings-panel input {
+          border-color: rgba(255, 255, 255, 0.42) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.30),
+              rgba(255, 255, 255, 0.12)
+            ) !important;
+          color: #0f172a !important;
+          backdrop-filter: blur(18px) saturate(145%);
+          -webkit-backdrop-filter: blur(18px) saturate(145%);
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.38),
+            0 8px 22px rgba(0, 0, 0, 0.08) !important;
+        }
+
+        .race-setup-panel input::placeholder,
+        .run-settings-panel input::placeholder {
+          color: rgba(51, 65, 85, 0.68) !important;
+        }
+
+        .race-setup-panel button,
+        .run-settings-panel button,
+        .race-map-hud button,
+        .race-custom-panel button,
+        .race-auto-loop-panel button,
+        .map-location-button,
+        .custom-guide-close {
+          transform: translateY(0) scale(1);
+          transition:
+            transform 140ms ease,
+            box-shadow 140ms ease,
+            filter 140ms ease,
+            background-color 140ms ease,
+            border-color 140ms ease;
+          will-change: transform;
+        }
+
+        .race-setup-panel button:active:not(:disabled),
+        .run-settings-panel button:active:not(:disabled),
+        .race-map-hud button:active:not(:disabled),
+        .race-custom-panel button:active:not(:disabled),
+        .race-auto-loop-panel button:active:not(:disabled),
+        .map-location-button:active:not(:disabled),
+        .custom-guide-close:active:not(:disabled) {
+          transform: translateY(1px) scale(0.972);
+          filter: brightness(0.94);
+        }
+
+        .course-action-button,
+        .course-action-primary,
+        .race-setup-panel button.bg-green-600,
+        .race-setup-panel button.bg-blue-600,
+        .race-setup-panel button.bg-indigo-600,
+        .race-setup-panel button.bg-slate-800,
+        .run-settings-panel button.bg-blue-600,
+        .run-settings-panel button.bg-slate-800 {
+          position: relative;
+          overflow: hidden;
+          border: 1px solid rgba(255, 255, 255, 0.32) !important;
+          border-radius: 18px;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(16, 18, 24, 0.68),
+              rgba(56, 45, 36, 0.42)
+            ) !important;
+          color: rgba(255, 255, 255, 0.98) !important;
+          font-weight: 900;
+          text-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+          backdrop-filter: blur(26px) saturate(160%);
+          -webkit-backdrop-filter: blur(26px) saturate(160%);
+          box-shadow:
+            0 16px 40px rgba(0, 0, 0, 0.22),
+            inset 0 1px 0 rgba(255, 255, 255, 0.24),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.08) !important;
+        }
+
+        .course-action-button::before,
+        .course-action-primary::before,
+        .race-setup-panel button.bg-green-600::before,
+        .race-setup-panel button.bg-blue-600::before,
+        .race-setup-panel button.bg-indigo-600::before,
+        .race-setup-panel button.bg-slate-800::before,
+        .run-settings-panel button.bg-blue-600::before,
+        .run-settings-panel button.bg-slate-800::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: 0;
+          background:
+            linear-gradient(
+              180deg,
+              rgba(255, 255, 255, 0.18),
+              rgba(255, 255, 255, 0.04) 42%,
+              transparent 72%
+            );
+          pointer-events: none;
+        }
+
+        .course-action-button > *,
+        .course-action-primary > *,
+        .race-setup-panel button.bg-green-600 > *,
+        .race-setup-panel button.bg-blue-600 > *,
+        .race-setup-panel button.bg-indigo-600 > *,
+        .race-setup-panel button.bg-slate-800 > *,
+        .run-settings-panel button.bg-blue-600 > *,
+        .run-settings-panel button.bg-slate-800 > * {
+          position: relative;
+          z-index: 1;
+        }
+
+        .course-action-button:hover:not(:disabled),
+        .course-action-primary:hover:not(:disabled) {
+          filter: brightness(1.06) saturate(1.03);
+          border-color: rgba(255, 255, 255, 0.44) !important;
+        }
+
+        .race-setup-panel button.bg-white,
+        .race-setup-panel button.bg-slate-100,
+        .race-setup-panel button[class*="bg-white/"],
+        .race-setup-panel button[class*="border-dashed"],
+        .run-settings-panel button.bg-white,
+        .run-settings-panel button.bg-slate-100,
+        .race-map-hud button.bg-slate-100,
+        .race-custom-panel button.bg-slate-100,
+        .race-auto-loop-panel button.bg-slate-100 {
+          border: 1px solid rgba(255, 255, 255, 0.34) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.18),
+              rgba(255, 255, 255, 0.07)
+            ) !important;
+          color: #0f172a !important;
+          backdrop-filter: blur(22px) saturate(155%);
+          -webkit-backdrop-filter: blur(22px) saturate(155%);
+          box-shadow:
+            0 12px 30px rgba(0, 0, 0, 0.12),
+            inset 0 1px 0 rgba(255, 255, 255, 0.32) !important;
+        }
+
+        .race-setup-panel button[class*="bg-slate-900"],
+        .race-setup-panel button[class*="bg-slate-950"],
+        .race-setup-panel button[class*="bg-slate-800"],
+        .run-settings-panel button[class*="bg-slate-900"],
+        .run-settings-panel button[class*="bg-slate-950"],
+        .run-settings-panel button[class*="bg-slate-800"] {
+          border: 1px solid rgba(255, 255, 255, 0.34) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(16, 18, 24, 0.70),
+              rgba(56, 45, 36, 0.42)
+            ) !important;
+          color: rgba(255, 255, 255, 0.98) !important;
+          backdrop-filter: blur(26px) saturate(160%);
+          -webkit-backdrop-filter: blur(26px) saturate(160%);
+          box-shadow:
+            0 16px 40px rgba(0, 0, 0, 0.22),
+            inset 0 1px 0 rgba(255, 255, 255, 0.24) !important;
+        }
+
+        .race-setup-panel button:disabled,
+        .run-settings-panel button:disabled,
+        .race-map-hud button:disabled,
+        .race-custom-panel button:disabled,
+        .race-auto-loop-panel button:disabled {
+          border-color: rgba(255, 255, 255, 0.22) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(226, 232, 240, 0.28),
+              rgba(255, 255, 255, 0.09)
+            ) !important;
+          color: rgba(71, 85, 105, 0.58) !important;
+          text-shadow: none;
+          backdrop-filter: blur(18px) saturate(125%);
+          -webkit-backdrop-filter: blur(18px) saturate(125%);
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.20),
+            0 8px 20px rgba(0, 0, 0, 0.08) !important;
+        }
+
+        .run-settings-backdrop {
+          position: absolute;
+          inset: 0;
+          z-index: 70;
+          display: flex;
+          align-items: flex-end;
+          justify-content: center;
+          background: rgba(15, 23, 42, 0.34);
+          padding: 12px 10px max(10px, env(safe-area-inset-bottom)) 10px;
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
+        }
+
+        .run-settings-panel {
+          width: 100%;
+          max-width: 560px;
+          max-height: min(84vh, 680px);
+          overflow-y: auto;
+          border-radius: 24px 24px 18px 18px;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.34),
+              rgba(255, 255, 255, 0.14)
+            ) !important;
+          padding: 14px;
+          -webkit-overflow-scrolling: touch;
         }
 
         .race-map-hud,
@@ -5005,9 +5384,13 @@ export default function RaceMap() {
           bottom: max(10px, env(safe-area-inset-bottom));
           overflow-y: auto;
           border-radius: 22px;
-          background: rgba(255, 255, 255, 0.96);
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.34),
+              rgba(255, 255, 255, 0.14)
+            ) !important;
           padding: 12px;
-          box-shadow: 0 18px 48px rgba(15, 23, 42, 0.26);
         }
 
         .race-map-hud-open {
@@ -5048,57 +5431,41 @@ export default function RaceMap() {
         }
 
         .map-location-button {
-          border: 0;
+          border: 1px solid rgba(255, 255, 255, 0.32);
           border-radius: 9999px;
-          background: rgba(37, 99, 235, 0.96);
+          background:
+            linear-gradient(
+              135deg,
+              rgba(16, 18, 24, 0.70),
+              rgba(56, 45, 36, 0.42)
+            );
           color: white;
           padding: 10px 14px;
           font-size: 13px;
           font-weight: 900;
-          box-shadow: 0 10px 28px rgba(15, 23, 42, 0.22);
-        }
-
-        .map-location-button:disabled {
-          cursor: not-allowed;
-          background: rgba(148, 163, 184, 0.9);
+          backdrop-filter: blur(22px) saturate(155%);
+          -webkit-backdrop-filter: blur(22px) saturate(155%);
+          box-shadow:
+            0 14px 34px rgba(0, 0, 0, 0.22),
+            inset 0 1px 0 rgba(255, 255, 255, 0.22);
         }
 
         .map-location-meta {
+          border: 1px solid rgba(255, 255, 255, 0.28);
           border-radius: 9999px;
-          background: rgba(255, 255, 255, 0.94);
-          color: #334155;
+          background: rgba(255, 255, 255, 0.18);
+          color: #0f172a;
           padding: 4px 8px;
           font-size: 10px;
-          font-weight: 700;
-          box-shadow: 0 6px 18px rgba(15, 23, 42, 0.14);
+          font-weight: 800;
+          backdrop-filter: blur(16px) saturate(145%);
+          -webkit-backdrop-filter: blur(16px) saturate(145%);
+          box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
         }
 
         .map-location-meta-error {
           color: #b91c1c;
-          background: rgba(254, 242, 242, 0.96);
-        }
-
-        .run-settings-backdrop {
-          position: absolute;
-          inset: 0;
-          z-index: 70;
-          display: flex;
-          align-items: flex-end;
-          justify-content: center;
-          background: rgba(15, 23, 42, 0.36);
-          padding: 12px 10px max(10px, env(safe-area-inset-bottom)) 10px;
-        }
-
-        .run-settings-panel {
-          width: 100%;
-          max-width: 560px;
-          max-height: min(84vh, 680px);
-          overflow-y: auto;
-          border-radius: 24px 24px 18px 18px;
-          background: rgba(255, 255, 255, 0.98);
-          padding: 14px;
-          box-shadow: 0 24px 70px rgba(15, 23, 42, 0.34);
-          -webkit-overflow-scrolling: touch;
+          background: rgba(254, 242, 242, 0.62);
         }
 
         .custom-guide-toast {
@@ -5112,10 +5479,14 @@ export default function RaceMap() {
           justify-content: space-between;
           gap: 10px;
           border-radius: 18px;
-          background: rgba(15, 23, 42, 0.94);
+          background:
+            linear-gradient(
+              135deg,
+              rgba(16, 18, 24, 0.76),
+              rgba(56, 45, 36, 0.48)
+            ) !important;
           color: white;
           padding: 12px 14px;
-          box-shadow: 0 18px 48px rgba(15, 23, 42, 0.3);
         }
 
         .custom-guide-text {
@@ -5125,187 +5496,16 @@ export default function RaceMap() {
         }
 
         .custom-guide-close {
-          border: 0;
+          border: 1px solid rgba(255, 255, 255, 0.24);
           border-radius: 9999px;
           width: 28px;
           height: 28px;
-          background: rgba(255, 255, 255, 0.14);
+          background: rgba(255, 255, 255, 0.12);
           color: white;
           font-size: 20px;
           line-height: 1;
           font-weight: 800;
         }
-
-
-
-        /* iOS Weather-style glass treatment for the setup screen */
-        .race-setup-panel > div {
-          position: relative;
-          z-index: 2;
-        }
-
-        .hero-glass-card {
-          border-color: rgba(255, 255, 255, 0.34) !important;
-          background:
-            linear-gradient(
-              135deg,
-              rgba(15, 23, 42, 0.62),
-              rgba(15, 23, 42, 0.36)
-            ) !important;
-          backdrop-filter: blur(24px) saturate(145%);
-          -webkit-backdrop-filter: blur(24px) saturate(145%);
-          box-shadow:
-            0 24px 60px rgba(15, 23, 42, 0.26),
-            inset 0 1px 0 rgba(255, 255, 255, 0.18),
-            inset 0 -1px 0 rgba(255, 255, 255, 0.06);
-        }
-
-        .race-setup-panel .rounded-xl.border,
-        .race-setup-panel .rounded-lg.border {
-          border-color: rgba(255, 255, 255, 0.34) !important;
-          background: rgba(255, 255, 255, 0.18) !important;
-          backdrop-filter: blur(22px) saturate(145%);
-          -webkit-backdrop-filter: blur(22px) saturate(145%);
-          box-shadow:
-            0 18px 46px rgba(15, 23, 42, 0.18),
-            inset 0 1px 0 rgba(255, 255, 255, 0.42),
-            inset 0 -1px 0 rgba(255, 255, 255, 0.12);
-        }
-
-        .race-setup-panel .bg-white {
-          background: rgba(255, 255, 255, 0.20) !important;
-          backdrop-filter: blur(18px) saturate(138%);
-          -webkit-backdrop-filter: blur(18px) saturate(138%);
-        }
-
-        .race-setup-panel .bg-slate-50,
-        .race-setup-panel .bg-blue-50,
-        .race-setup-panel .bg-orange-50,
-        .race-setup-panel .bg-red-50,
-        .race-setup-panel .bg-yellow-50,
-        .race-setup-panel .bg-emerald-50 {
-          background: rgba(255, 255, 255, 0.14) !important;
-          backdrop-filter: blur(16px) saturate(132%);
-          -webkit-backdrop-filter: blur(16px) saturate(132%);
-        }
-
-        .race-setup-panel input {
-          border-color: rgba(255, 255, 255, 0.42) !important;
-          background: rgba(255, 255, 255, 0.24) !important;
-          color: #0f172a;
-          backdrop-filter: blur(14px) saturate(128%);
-          -webkit-backdrop-filter: blur(14px) saturate(128%);
-          box-shadow:
-            inset 0 1px 0 rgba(255, 255, 255, 0.36),
-            0 8px 20px rgba(15, 23, 42, 0.06);
-        }
-
-        .race-setup-panel input::placeholder {
-          color: rgba(51, 65, 85, 0.68);
-        }
-
-
-        .course-action-button {
-          position: relative;
-          overflow: hidden;
-          width: 100%;
-          min-height: 42px;
-          border: 1px solid rgba(255, 255, 255, 0.30);
-          border-radius: 16px;
-          color: rgba(255, 255, 255, 0.96);
-          font-weight: 900;
-          letter-spacing: -0.01em;
-          text-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
-          backdrop-filter: blur(20px) saturate(132%);
-          -webkit-backdrop-filter: blur(20px) saturate(132%);
-          box-shadow:
-            0 12px 26px rgba(15, 23, 42, 0.18),
-            inset 0 1px 0 rgba(255, 255, 255, 0.24),
-            inset 0 -1px 0 rgba(0, 0, 0, 0.18);
-          transition:
-            transform 140ms ease,
-            filter 140ms ease,
-            box-shadow 140ms ease,
-            border-color 140ms ease,
-            background 140ms ease;
-        }
-
-        .course-action-button::before {
-          content: "";
-          position: absolute;
-          inset: 0;
-          background:
-            linear-gradient(
-              180deg,
-              rgba(255, 255, 255, 0.18),
-              rgba(255, 255, 255, 0.05) 42%,
-              transparent 72%
-            );
-          pointer-events: none;
-        }
-
-        .course-action-button:hover:not(:disabled) {
-          filter: brightness(1.06) saturate(1.02);
-          border-color: rgba(255, 255, 255, 0.44);
-          box-shadow:
-            0 16px 32px rgba(15, 23, 42, 0.22),
-            inset 0 1px 0 rgba(255, 255, 255, 0.30),
-            inset 0 -1px 0 rgba(0, 0, 0, 0.18);
-        }
-
-        .course-action-button:active:not(:disabled) {
-          transform: translateY(1px) scale(0.982);
-          filter: brightness(0.94) saturate(0.96);
-          box-shadow:
-            0 7px 16px rgba(15, 23, 42, 0.24),
-            inset 0 2px 10px rgba(0, 0, 0, 0.24),
-            inset 0 1px 0 rgba(255, 255, 255, 0.14);
-        }
-
-        .course-action-button:disabled {
-          border-color: rgba(255, 255, 255, 0.20);
-          background: rgba(71, 85, 105, 0.30) !important;
-          color: rgba(255, 255, 255, 0.58);
-          box-shadow:
-            inset 0 1px 0 rgba(255, 255, 255, 0.12),
-            0 8px 18px rgba(15, 23, 42, 0.08);
-          text-shadow: none;
-        }
-
-        .course-action-primary {
-          background:
-            linear-gradient(
-              135deg,
-              rgba(17, 24, 39, 0.78),
-              rgba(68, 52, 40, 0.54)
-            );
-        }
-
-        .race-root button {
-          transform: translateY(0) scale(1);
-          transition:
-            transform 140ms ease,
-            box-shadow 140ms ease,
-            filter 140ms ease,
-            background-color 140ms ease,
-            border-color 140ms ease;
-          will-change: transform;
-        }
-
-        .race-root button:hover:not(:disabled) {
-          filter: brightness(1.02);
-        }
-
-        .race-root button:active:not(:disabled) {
-          transform: translateY(1px) scale(0.975);
-          filter: brightness(0.96);
-        }
-
-        .race-root button:disabled {
-          transform: none;
-          filter: none;
-        }
-
 
         .target-distance-popover {
           position: absolute;
@@ -5313,28 +5513,22 @@ export default function RaceMap() {
           top: calc(100% + 10px);
           z-index: 80;
           max-width: min(270px, calc(100vw - 44px));
-          border: 1px solid rgba(255, 255, 255, 0.30);
           border-radius: 16px;
           background:
             linear-gradient(
               135deg,
-              rgba(15, 23, 42, 0.90),
-              rgba(68, 52, 40, 0.76)
-            );
+              rgba(16, 18, 24, 0.86),
+              rgba(56, 45, 36, 0.62)
+            ) !important;
           color: rgba(255, 255, 255, 0.96);
           padding: 10px 12px;
           text-align: left;
           font-size: 12px;
           font-weight: 900;
           line-height: 1.35;
-          box-shadow:
-            0 14px 34px rgba(15, 23, 42, 0.26),
-            inset 0 1px 0 rgba(255, 255, 255, 0.18);
-          backdrop-filter: blur(18px) saturate(145%);
-          -webkit-backdrop-filter: blur(18px) saturate(145%);
         }
 
-        .target-distance-popover::before {
+        .target-distance-popover::after {
           content: "";
           position: absolute;
           top: -6px;
@@ -5342,9 +5536,9 @@ export default function RaceMap() {
           width: 12px;
           height: 12px;
           transform: rotate(45deg);
-          border-left: 1px solid rgba(255, 255, 255, 0.30);
-          border-top: 1px solid rgba(255, 255, 255, 0.30);
-          background: rgba(15, 23, 42, 0.88);
+          border-left: 1px solid rgba(255, 255, 255, 0.32);
+          border-top: 1px solid rgba(255, 255, 255, 0.32);
+          background: rgba(16, 18, 24, 0.82);
         }
 
         @media (orientation: landscape) and (max-height: 560px) {
@@ -5500,681 +5694,9 @@ export default function RaceMap() {
             left: 8px;
             right: 8px;
           }
-
-
-        /* Stronger iOS-style glassmorphism for setup screen cards */
-        .race-setup-panel > div {
-          position: relative;
-          z-index: 2;
         }
-
-        .hero-glass-card {
-          position: relative;
-          overflow: hidden;
-          border-color: rgba(255, 255, 255, 0.34) !important;
-          background:
-            linear-gradient(
-              135deg,
-              rgba(15, 23, 42, 0.58),
-              rgba(68, 52, 40, 0.34)
-            ) !important;
-          backdrop-filter: blur(28px) saturate(160%);
-          -webkit-backdrop-filter: blur(28px) saturate(160%);
-          box-shadow:
-            0 24px 60px rgba(15, 23, 42, 0.24),
-            inset 0 1px 0 rgba(255, 255, 255, 0.22),
-            inset 0 -1px 0 rgba(255, 255, 255, 0.08);
-        }
-
-        .hero-glass-card::before {
-          content: "";
-          position: absolute;
-          inset: 0;
-          z-index: 0;
-          background:
-            linear-gradient(
-              180deg,
-              rgba(255, 255, 255, 0.16),
-              transparent 46%
-            );
-          pointer-events: none;
-        }
-
-        .hero-glass-card > * {
-          position: relative;
-          z-index: 1;
-        }
-
-        /* Main white cards: course card, running prep card, my courses cards */
-        .race-setup-panel .rounded-xl.border,
-        .race-setup-panel .rounded-lg.border {
-          position: relative;
-          overflow: hidden;
-          border-color: rgba(255, 255, 255, 0.42) !important;
-          background:
-            linear-gradient(
-              135deg,
-              rgba(255, 255, 255, 0.24),
-              rgba(255, 255, 255, 0.10)
-            ) !important;
-          backdrop-filter: blur(26px) saturate(155%);
-          -webkit-backdrop-filter: blur(26px) saturate(155%);
-          box-shadow:
-            0 18px 45px rgba(15, 23, 42, 0.20),
-            inset 0 1px 0 rgba(255, 255, 255, 0.44),
-            inset 0 -1px 0 rgba(255, 255, 255, 0.10);
-        }
-
-        /* Soft highlight layer inside cards */
-        .race-setup-panel .rounded-xl.border::before,
-        .race-setup-panel .rounded-lg.border::before {
-          content: "";
-          position: absolute;
-          inset: 0;
-          z-index: 0;
-          background:
-            linear-gradient(
-              180deg,
-              rgba(255, 255, 255, 0.18),
-              transparent 42%
-            );
-          pointer-events: none;
-        }
-
-        /* Keep card contents above glass highlight */
-        .race-setup-panel .rounded-xl.border > *,
-        .race-setup-panel .rounded-lg.border > * {
-          position: relative;
-          z-index: 1;
-        }
-
-        /* Inner info boxes inside cards */
-        .race-setup-panel .bg-slate-50,
-        .race-setup-panel .bg-blue-50,
-        .race-setup-panel .bg-orange-50,
-        .race-setup-panel .bg-red-50,
-        .race-setup-panel .bg-yellow-50,
-        .race-setup-panel .bg-emerald-50 {
-          border: 1px solid rgba(255, 255, 255, 0.32) !important;
-          background:
-            linear-gradient(
-              135deg,
-              rgba(255, 255, 255, 0.20),
-              rgba(255, 255, 255, 0.08)
-            ) !important;
-          backdrop-filter: blur(20px) saturate(145%);
-          -webkit-backdrop-filter: blur(20px) saturate(145%);
-        }
-
-        /* Inputs */
-        .race-setup-panel input {
-          border-color: rgba(255, 255, 255, 0.44) !important;
-          background:
-            linear-gradient(
-              135deg,
-              rgba(255, 255, 255, 0.30),
-              rgba(255, 255, 255, 0.14)
-            ) !important;
-          color: #0f172a;
-          backdrop-filter: blur(18px) saturate(135%);
-          -webkit-backdrop-filter: blur(18px) saturate(135%);
-          box-shadow:
-            inset 0 1px 0 rgba(255, 255, 255, 0.34),
-            0 8px 22px rgba(15, 23, 42, 0.08);
-        }
-
-        .race-setup-panel input::placeholder {
-          color: rgba(51, 65, 85, 0.72);
-        }
-
-        /* Quick distance buttons, secondary buttons */
-        .race-setup-panel button.bg-white,
-        .race-setup-panel button.bg-slate-100 {
-          border: 1px solid rgba(255, 255, 255, 0.42) !important;
-          background:
-            linear-gradient(
-              135deg,
-              rgba(255, 255, 255, 0.30),
-              rgba(255, 255, 255, 0.13)
-            ) !important;
-          color: #0f172a !important;
-          backdrop-filter: blur(20px) saturate(145%);
-          -webkit-backdrop-filter: blur(20px) saturate(145%);
-          box-shadow:
-            0 10px 24px rgba(15, 23, 42, 0.14),
-            inset 0 1px 0 rgba(255, 255, 255, 0.42);
-        }
-
-        /* Selected dark buttons such as active 3K */
-        .race-setup-panel button[class*="bg-slate-900"],
-        .race-setup-panel button[class*="bg-slate-950"],
-        .race-setup-panel button[class*="bg-slate-800"] {
-          border: 1px solid rgba(255, 255, 255, 0.24) !important;
-          background:
-            linear-gradient(
-              135deg,
-              rgba(15, 23, 42, 0.78),
-              rgba(68, 52, 40, 0.48)
-            ) !important;
-          color: rgba(255, 255, 255, 0.96) !important;
-          backdrop-filter: blur(22px) saturate(150%);
-          -webkit-backdrop-filter: blur(22px) saturate(150%);
-          box-shadow:
-            0 12px 30px rgba(15, 23, 42, 0.24),
-            inset 0 1px 0 rgba(255, 255, 255, 0.18);
-        }
-
-        /* Main course CTA buttons */
-        .course-action-button,
-        .course-action-primary {
-          border: 1px solid rgba(255, 255, 255, 0.26) !important;
-          background:
-            linear-gradient(
-              135deg,
-              rgba(17, 24, 39, 0.78),
-              rgba(68, 52, 40, 0.54)
-            ) !important;
-          color: rgba(255, 255, 255, 0.97) !important;
-          backdrop-filter: blur(24px) saturate(150%);
-          -webkit-backdrop-filter: blur(24px) saturate(150%);
-          box-shadow:
-            0 14px 34px rgba(15, 23, 42, 0.24),
-            inset 0 1px 0 rgba(255, 255, 255, 0.22),
-            inset 0 -1px 0 rgba(255, 255, 255, 0.08);
-        }
-
-        /* Disabled buttons should still look glassy, not flat gray */
-        .race-setup-panel button:disabled {
-          border-color: rgba(255, 255, 255, 0.28) !important;
-          background:
-            linear-gradient(
-              135deg,
-              rgba(226, 232, 240, 0.32),
-              rgba(226, 232, 240, 0.14)
-            ) !important;
-          color: rgba(71, 85, 105, 0.62) !important;
-          backdrop-filter: blur(18px) saturate(120%);
-          -webkit-backdrop-filter: blur(18px) saturate(120%);
-          box-shadow:
-            inset 0 1px 0 rgba(255, 255, 255, 0.24),
-            0 8px 20px rgba(15, 23, 42, 0.08);
-        }
-
-        /* More tactile press effect */
-        .race-setup-panel button:active:not(:disabled),
-        .course-action-button:active:not(:disabled),
-        .course-action-primary:active:not(:disabled) {
-          transform: translateY(1px) scale(0.972);
-          filter: brightness(0.93);
-          box-shadow:
-            0 7px 18px rgba(15, 23, 42, 0.24),
-            inset 0 3px 10px rgba(15, 23, 42, 0.24),
-            inset 0 1px 0 rgba(255, 255, 255, 0.10);
-        }
-        }
-
-
-        /* Unified hero-style dark glass cards and controls */
-        .race-setup-panel > div {
-          position: relative;
-          z-index: 2;
-        }
-
-        .race-setup-panel .hero-glass-card,
-        .race-setup-panel .rounded-xl.border,
-        .race-setup-panel .rounded-lg.border,
-        .race-setup-panel .rounded-xl[class*="border"],
-        .race-setup-panel .rounded-lg[class*="border"] {
-          position: relative;
-          overflow: hidden;
-          border: 1px solid rgba(255, 255, 255, 0.30) !important;
-          background:
-            linear-gradient(
-              135deg,
-              rgba(17, 24, 39, 0.68),
-              rgba(68, 52, 40, 0.42)
-            ) !important;
-          color: rgba(255, 255, 255, 0.96) !important;
-          backdrop-filter: blur(26px) saturate(150%);
-          -webkit-backdrop-filter: blur(26px) saturate(150%);
-          box-shadow:
-            0 20px 54px rgba(15, 23, 42, 0.24),
-            inset 0 1px 0 rgba(255, 255, 255, 0.24),
-            inset 0 -1px 0 rgba(255, 255, 255, 0.08) !important;
-        }
-
-        .race-setup-panel .hero-glass-card::before,
-        .race-setup-panel .rounded-xl.border::before,
-        .race-setup-panel .rounded-lg.border::before,
-        .race-setup-panel .rounded-xl[class*="border"]::before,
-        .race-setup-panel .rounded-lg[class*="border"]::before {
-          content: "";
-          position: absolute;
-          inset: 0;
-          z-index: 0;
-          background:
-            radial-gradient(
-              circle at 16% 0%,
-              rgba(255, 255, 255, 0.20),
-              transparent 38%
-            ),
-            linear-gradient(
-              180deg,
-              rgba(255, 255, 255, 0.16),
-              transparent 44%
-            );
-          pointer-events: none;
-        }
-
-        .race-setup-panel .hero-glass-card > *,
-        .race-setup-panel .rounded-xl.border > *,
-        .race-setup-panel .rounded-lg.border > *,
-        .race-setup-panel .rounded-xl[class*="border"] > *,
-        .race-setup-panel .rounded-lg[class*="border"] > * {
-          position: relative;
-          z-index: 1;
-        }
-
-        /* Card color variations: same hero material, subtle tint only */
-        .race-setup-panel .bg-white,
-        .race-setup-panel [class*="bg-white/"] {
-          background:
-            linear-gradient(
-              135deg,
-              rgba(17, 24, 39, 0.62),
-              rgba(68, 52, 40, 0.38)
-            ) !important;
-        }
-
-        .race-setup-panel .bg-slate-50,
-        .race-setup-panel .bg-slate-100 {
-          background:
-            linear-gradient(
-              135deg,
-              rgba(15, 23, 42, 0.58),
-              rgba(51, 65, 85, 0.34)
-            ) !important;
-        }
-
-        .race-setup-panel .bg-blue-50,
-        .race-setup-panel .bg-indigo-50 {
-          background:
-            linear-gradient(
-              135deg,
-              rgba(15, 23, 42, 0.62),
-              rgba(30, 58, 138, 0.30)
-            ) !important;
-        }
-
-        .race-setup-panel .bg-purple-50,
-        .race-setup-panel .bg-violet-50 {
-          background:
-            linear-gradient(
-              135deg,
-              rgba(17, 24, 39, 0.62),
-              rgba(88, 28, 135, 0.28)
-            ) !important;
-        }
-
-        .race-setup-panel .bg-emerald-50,
-        .race-setup-panel .bg-green-50 {
-          background:
-            linear-gradient(
-              135deg,
-              rgba(17, 24, 39, 0.62),
-              rgba(20, 83, 45, 0.30)
-            ) !important;
-        }
-
-        .race-setup-panel .bg-orange-50,
-        .race-setup-panel .bg-yellow-50 {
-          background:
-            linear-gradient(
-              135deg,
-              rgba(17, 24, 39, 0.62),
-              rgba(120, 53, 15, 0.30)
-            ) !important;
-        }
-
-        .race-setup-panel .bg-red-50 {
-          background:
-            linear-gradient(
-              135deg,
-              rgba(17, 24, 39, 0.62),
-              rgba(127, 29, 29, 0.30)
-            ) !important;
-        }
-
-        /* Make legacy text colors readable on dark hero-style cards */
-        .race-setup-panel .rounded-xl.border .text-slate-950,
-        .race-setup-panel .rounded-xl.border .text-slate-900,
-        .race-setup-panel .rounded-xl.border .text-slate-800,
-        .race-setup-panel .rounded-xl.border .text-slate-700,
-        .race-setup-panel .rounded-lg.border .text-slate-950,
-        .race-setup-panel .rounded-lg.border .text-slate-900,
-        .race-setup-panel .rounded-lg.border .text-slate-800,
-        .race-setup-panel .rounded-lg.border .text-slate-700 {
-          color: rgba(255, 255, 255, 0.94) !important;
-        }
-
-        .race-setup-panel .rounded-xl.border .text-slate-600,
-        .race-setup-panel .rounded-xl.border .text-slate-500,
-        .race-setup-panel .rounded-xl.border .text-slate-400,
-        .race-setup-panel .rounded-lg.border .text-slate-600,
-        .race-setup-panel .rounded-lg.border .text-slate-500,
-        .race-setup-panel .rounded-lg.border .text-slate-400 {
-          color: rgba(226, 232, 240, 0.76) !important;
-        }
-
-        .race-setup-panel .rounded-xl.border .text-blue-700,
-        .race-setup-panel .rounded-lg.border .text-blue-700,
-        .race-setup-panel .rounded-xl.border .text-orange-700,
-        .race-setup-panel .rounded-lg.border .text-orange-700,
-        .race-setup-panel .rounded-xl.border .text-emerald-700,
-        .race-setup-panel .rounded-lg.border .text-emerald-700 {
-          color: rgba(209, 250, 229, 0.92) !important;
-        }
-
-        .race-setup-panel .rounded-xl.border .text-red-700,
-        .race-setup-panel .rounded-lg.border .text-red-700 {
-          color: rgba(254, 202, 202, 0.96) !important;
-        }
-
-        .race-setup-panel input {
-          border: 1px solid rgba(255, 255, 255, 0.28) !important;
-          background:
-            linear-gradient(
-              135deg,
-              rgba(15, 23, 42, 0.40),
-              rgba(255, 255, 255, 0.10)
-            ) !important;
-          color: rgba(255, 255, 255, 0.96) !important;
-          backdrop-filter: blur(22px) saturate(145%);
-          -webkit-backdrop-filter: blur(22px) saturate(145%);
-          box-shadow:
-            inset 0 1px 0 rgba(255, 255, 255, 0.16),
-            0 10px 24px rgba(15, 23, 42, 0.12) !important;
-        }
-
-        .race-setup-panel input::placeholder {
-          color: rgba(226, 232, 240, 0.64) !important;
-        }
-
-        /* All main course buttons should match hero-card material exactly */
-        .course-action-button,
-        .course-action-primary {
-          position: relative;
-          overflow: hidden;
-          border: 1px solid rgba(255, 255, 255, 0.30) !important;
-          border-radius: 16px;
-          background:
-            linear-gradient(
-              135deg,
-              rgba(17, 24, 39, 0.68),
-              rgba(68, 52, 40, 0.42)
-            ) !important;
-          color: rgba(255, 255, 255, 0.96) !important;
-          font-weight: 900;
-          letter-spacing: -0.01em;
-          backdrop-filter: blur(26px) saturate(150%);
-          -webkit-backdrop-filter: blur(26px) saturate(150%);
-          box-shadow:
-            0 20px 54px rgba(15, 23, 42, 0.24),
-            inset 0 1px 0 rgba(255, 255, 255, 0.24),
-            inset 0 -1px 0 rgba(255, 255, 255, 0.08) !important;
-          transition:
-            transform 150ms ease,
-            filter 150ms ease,
-            box-shadow 150ms ease,
-            background 150ms ease;
-        }
-
-        .course-action-button::before,
-        .course-action-primary::before {
-          content: "";
-          position: absolute;
-          inset: 0;
-          background:
-            radial-gradient(
-              circle at 16% 0%,
-              rgba(255, 255, 255, 0.20),
-              transparent 38%
-            ),
-            linear-gradient(
-              180deg,
-              rgba(255, 255, 255, 0.16),
-              transparent 44%
-            );
-          pointer-events: none;
-        }
-
-        .course-action-button:hover:not(:disabled),
-        .course-action-primary:hover:not(:disabled) {
-          filter: brightness(1.04);
-        }
-
-        .course-action-button:active:not(:disabled),
-        .course-action-primary:active:not(:disabled) {
-          transform: translateY(1px) scale(0.972);
-          filter: brightness(0.92);
-          box-shadow:
-            0 8px 22px rgba(15, 23, 42, 0.24),
-            inset 0 4px 12px rgba(15, 23, 42, 0.28),
-            inset 0 1px 0 rgba(255, 255, 255, 0.10) !important;
-        }
-
-        /* Secondary setup buttons use the same material with slightly lower emphasis */
-        .race-setup-panel button.bg-white,
-        .race-setup-panel button.bg-slate-100,
-        .race-setup-panel button[class*="bg-white/"],
-        .race-setup-panel button[class*="border-dashed"] {
-          border: 1px solid rgba(255, 255, 255, 0.26) !important;
-          background:
-            linear-gradient(
-              135deg,
-              rgba(17, 24, 39, 0.52),
-              rgba(68, 52, 40, 0.28)
-            ) !important;
-          color: rgba(255, 255, 255, 0.92) !important;
-          backdrop-filter: blur(24px) saturate(145%);
-          -webkit-backdrop-filter: blur(24px) saturate(145%);
-          box-shadow:
-            0 14px 34px rgba(15, 23, 42, 0.18),
-            inset 0 1px 0 rgba(255, 255, 255, 0.18) !important;
-        }
-
-        .race-setup-panel button[class*="bg-slate-900"],
-        .race-setup-panel button[class*="bg-slate-950"],
-        .race-setup-panel button[class*="bg-slate-800"] {
-          border: 1px solid rgba(255, 255, 255, 0.30) !important;
-          background:
-            linear-gradient(
-              135deg,
-              rgba(17, 24, 39, 0.72),
-              rgba(68, 52, 40, 0.42)
-            ) !important;
-          color: rgba(255, 255, 255, 0.96) !important;
-          backdrop-filter: blur(26px) saturate(150%);
-          -webkit-backdrop-filter: blur(26px) saturate(150%);
-          box-shadow:
-            0 18px 46px rgba(15, 23, 42, 0.22),
-            inset 0 1px 0 rgba(255, 255, 255, 0.20) !important;
-        }
-
-        .race-setup-panel button:disabled {
-          border-color: rgba(255, 255, 255, 0.18) !important;
-          background:
-            linear-gradient(
-              135deg,
-              rgba(17, 24, 39, 0.32),
-              rgba(68, 52, 40, 0.18)
-            ) !important;
-          color: rgba(226, 232, 240, 0.48) !important;
-          box-shadow:
-            inset 0 1px 0 rgba(255, 255, 255, 0.10),
-            0 8px 20px rgba(15, 23, 42, 0.10) !important;
-        }
-
-
-        /* Final main-screen material direction: dark hero + warm ivory content cards */
-        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card),
-        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) {
-          border-color: rgba(255, 255, 255, 0.46) !important;
-          background:
-            linear-gradient(
-              135deg,
-              rgba(255, 255, 255, 0.38),
-              rgba(255, 250, 240, 0.20)
-            ) !important;
-          color: #0f172a !important;
-          backdrop-filter: blur(26px) saturate(150%);
-          -webkit-backdrop-filter: blur(26px) saturate(150%);
-          box-shadow:
-            0 18px 46px rgba(15, 23, 42, 0.18),
-            inset 0 1px 0 rgba(255, 255, 255, 0.58),
-            inset 0 -1px 0 rgba(255, 255, 255, 0.16) !important;
-        }
-
-        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card)::before,
-        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card)::before {
-          background:
-            radial-gradient(
-              circle at 18% 0%,
-              rgba(255, 255, 255, 0.30),
-              transparent 40%
-            ),
-            linear-gradient(
-              180deg,
-              rgba(255, 255, 255, 0.24),
-              transparent 46%
-            ) !important;
-        }
-
-        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card) .text-slate-950,
-        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card) .text-slate-900,
-        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card) .text-slate-800,
-        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card) .text-slate-700,
-        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) .text-slate-950,
-        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) .text-slate-900,
-        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) .text-slate-800,
-        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) .text-slate-700 {
-          color: #0f172a !important;
-        }
-
-        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card) .text-slate-600,
-        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card) .text-slate-500,
-        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card) .text-slate-400,
-        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) .text-slate-600,
-        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) .text-slate-500,
-        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) .text-slate-400 {
-          color: rgba(51, 65, 85, 0.78) !important;
-        }
-
-        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card) .text-blue-700,
-        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) .text-blue-700 {
-          color: #1d4ed8 !important;
-        }
-
-        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card) .text-orange-700,
-        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) .text-orange-700 {
-          color: #c2410c !important;
-        }
-
-        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card) .text-emerald-700,
-        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) .text-emerald-700 {
-          color: #047857 !important;
-        }
-
-        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card) .text-red-700,
-        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) .text-red-700 {
-          color: #b91c1c !important;
-        }
-
-        /* Light ivory glass for inner information boxes on the setup screen */
-        .race-setup-panel div.bg-white,
-        .race-setup-panel div.bg-slate-50,
-        .race-setup-panel div.bg-slate-100,
-        .race-setup-panel div.bg-blue-50,
-        .race-setup-panel div.bg-indigo-50,
-        .race-setup-panel div.bg-purple-50,
-        .race-setup-panel div.bg-violet-50,
-        .race-setup-panel div.bg-emerald-50,
-        .race-setup-panel div.bg-green-50,
-        .race-setup-panel div.bg-orange-50,
-        .race-setup-panel div.bg-yellow-50,
-        .race-setup-panel div.bg-red-50 {
-          border: 1px solid rgba(255, 255, 255, 0.34) !important;
-          background:
-            linear-gradient(
-              135deg,
-              rgba(255, 255, 255, 0.26),
-              rgba(255, 250, 240, 0.12)
-            ) !important;
-          color: #0f172a !important;
-          backdrop-filter: blur(22px) saturate(145%);
-          -webkit-backdrop-filter: blur(22px) saturate(145%);
-          box-shadow:
-            inset 0 1px 0 rgba(255, 255, 255, 0.42),
-            0 10px 26px rgba(15, 23, 42, 0.10) !important;
-        }
-
-        .race-setup-panel input {
-          border-color: rgba(255, 255, 255, 0.48) !important;
-          background:
-            linear-gradient(
-              135deg,
-              rgba(255, 255, 255, 0.34),
-              rgba(255, 250, 240, 0.16)
-            ) !important;
-          color: #0f172a !important;
-          backdrop-filter: blur(22px) saturate(145%);
-          -webkit-backdrop-filter: blur(22px) saturate(145%);
-          box-shadow:
-            inset 0 1px 0 rgba(255, 255, 255, 0.46),
-            0 10px 24px rgba(15, 23, 42, 0.10) !important;
-        }
-
-        .race-setup-panel input::placeholder {
-          color: rgba(51, 65, 85, 0.70) !important;
-        }
-
-        /* Keep quick distance and secondary controls bright; keep primary course CTAs dark */
-        .race-setup-panel button.bg-white,
-        .race-setup-panel button.bg-slate-100,
-        .race-setup-panel button[class*="bg-white/"],
-        .race-setup-panel button[class*="border-dashed"] {
-          border: 1px solid rgba(255, 255, 255, 0.44) !important;
-          background:
-            linear-gradient(
-              135deg,
-              rgba(255, 255, 255, 0.32),
-              rgba(255, 250, 240, 0.14)
-            ) !important;
-          color: #0f172a !important;
-          backdrop-filter: blur(22px) saturate(145%);
-          -webkit-backdrop-filter: blur(22px) saturate(145%);
-          box-shadow:
-            0 12px 28px rgba(15, 23, 42, 0.14),
-            inset 0 1px 0 rgba(255, 255, 255, 0.48) !important;
-        }
-
-        .race-setup-panel button:disabled {
-          border-color: rgba(255, 255, 255, 0.30) !important;
-          background:
-            linear-gradient(
-              135deg,
-              rgba(226, 232, 240, 0.34),
-              rgba(255, 255, 255, 0.12)
-            ) !important;
-          color: rgba(71, 85, 105, 0.58) !important;
-          backdrop-filter: blur(18px) saturate(125%);
-          -webkit-backdrop-filter: blur(18px) saturate(125%);
-          box-shadow:
-            inset 0 1px 0 rgba(255, 255, 255, 0.30),
-            0 8px 20px rgba(15, 23, 42, 0.08) !important;
-        }
-
       `}</style>
+
     </div>
   );
 }
