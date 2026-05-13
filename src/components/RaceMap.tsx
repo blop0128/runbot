@@ -4024,9 +4024,21 @@ export default function RaceMap() {
 
   return (
     <div
-      className={`race-root ${
-        activePanel === "setup" ? "race-root-setup" : "race-root-map"
-      }`}
+      className={[
+        "race-root",
+        activePanel === "setup" ? "race-root-setup" : "race-root-map",
+        activePanel === "map" && isAutoLoopPanelVisible
+          ? "race-root-auto-loop-open"
+          : "",
+        activePanel === "map" && isAutoLoopPanelCollapsed
+          ? "race-root-auto-loop-collapsed"
+          : "",
+        activePanel === "map" && isCustomCourseMode
+          ? "race-root-custom-course-open"
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
     >
       <svg
         className="liquid-filter-svg"
@@ -7807,6 +7819,102 @@ export default function RaceMap() {
         button.liquid-clear-control:disabled * {
           color: rgba(100, 116, 139, 0.56) !important;
           text-shadow: none !important;
+        }
+
+
+        /* =========================================================
+           Mobile map overlay separation
+           - Candidate list, top tabs, and location control get fixed lanes.
+           - Prevents overlap after route search on mobile browsers.
+           ========================================================= */
+        @media (max-width: 767px) {
+          .race-root-map.race-root-auto-loop-open .race-top-tabs {
+            z-index: 90;
+            top: max(8px, env(safe-area-inset-top));
+            left: 10px;
+            right: 10px;
+          }
+
+          .race-root-map.race-root-auto-loop-open .map-location-control {
+            z-index: 88;
+            top: calc(max(8px, env(safe-area-inset-top)) + 58px);
+            left: 10px;
+            right: 10px;
+            max-width: none;
+            width: auto;
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 8px;
+          }
+
+          .race-root-map.race-root-auto-loop-open .map-location-button {
+            min-height: 42px;
+            padding: 10px 14px;
+            white-space: nowrap;
+          }
+
+          .race-root-map.race-root-auto-loop-open .map-location-meta {
+            display: none;
+          }
+
+          .race-root-map.race-root-auto-loop-open .race-auto-loop-panel {
+            z-index: 70;
+            top: calc(max(8px, env(safe-area-inset-top)) + 112px);
+            bottom: max(10px, env(safe-area-inset-bottom));
+            left: 10px;
+            right: 10px;
+            max-height: none;
+            border-radius: 24px;
+            padding: 12px;
+          }
+
+          .race-root-map.race-root-auto-loop-open.race-root-auto-loop-collapsed .race-auto-loop-panel {
+            top: auto;
+            max-height: 110px;
+          }
+
+          .race-root-map.race-root-auto-loop-open .race-auto-loop-panel > .mb-2 {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            margin: -2px -2px 8px -2px;
+            border-radius: 18px;
+            padding: 8px;
+            background: linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.78),
+              rgba(255, 255, 255, 0.36)
+            );
+            backdrop-filter: blur(22px) saturate(170%);
+            -webkit-backdrop-filter: blur(22px) saturate(170%);
+            box-shadow:
+              0 10px 24px rgba(15, 23, 42, 0.08),
+              inset 0 1px 0 rgba(255, 255, 255, 0.76);
+          }
+        }
+
+        @media (max-width: 480px) {
+          .race-root-map.race-root-auto-loop-open .race-auto-loop-panel .rounded-lg.border > .flex.items-start.justify-between.gap-2 {
+            flex-direction: column;
+          }
+
+          .race-root-map.race-root-auto-loop-open .race-auto-loop-panel .rounded-lg.border > .flex.items-start.justify-between.gap-2 > .flex.shrink-0.flex-col.gap-1 {
+            width: 100%;
+            flex-direction: row;
+          }
+
+          .race-root-map.race-root-auto-loop-open .race-auto-loop-panel .rounded-lg.border > .flex.items-start.justify-between.gap-2 > .flex.shrink-0.flex-col.gap-1 > button {
+            flex: 1 1 0;
+            min-height: 42px;
+          }
+
+          .race-root-map.race-root-auto-loop-open .race-auto-loop-panel {
+            left: 8px;
+            right: 8px;
+            padding: 10px;
+          }
         }
 
       `}</style>
