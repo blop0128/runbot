@@ -1176,6 +1176,8 @@ export default function RaceMap() {
   const [isGeneratingAutoLoop, setIsGeneratingAutoLoop] = useState(false);
   const [isGeneratingOneWay, setIsGeneratingOneWay] = useState(false);
   const [autoLoopTargetKm, setAutoLoopTargetKm] = useState("3.0");
+  const [isTargetDistanceHintVisible, setIsTargetDistanceHintVisible] =
+    useState(false);
   const [autoLoopAllCandidates, setAutoLoopAllCandidates] = useState<
     AutoLoopCourseCandidate[]
   >([]);
@@ -2267,6 +2269,18 @@ export default function RaceMap() {
     return parsed * 1000;
   }
 
+  function showTargetDistanceHint() {
+    setIsTargetDistanceHintVisible(true);
+    setAutoLoopError(null);
+    setStatus("목표 거리를 입력해 주세요.");
+    setActivePanel("setup");
+    setSetupView("main");
+  }
+
+  function hideTargetDistanceHint() {
+    setIsTargetDistanceHintVisible(false);
+  }
+
   function handleShowMoreAutoLoopCandidates() {
     if (autoLoopAllCandidates.length === 0) return;
 
@@ -2995,6 +3009,14 @@ export default function RaceMap() {
   async function handleGenerateOutAndBackCandidates() {
     if (isRunning) return;
 
+    const targetDistanceM = parseAutoLoopTargetDistanceM();
+
+    if (!Number.isFinite(targetDistanceM) || targetDistanceM <= 0) {
+      showTargetDistanceHint();
+      return;
+    }
+
+    hideTargetDistanceHint();
     setCandidateMode("outAndBack");
     setAutoLoopError(null);
     setGpsActionError(null);
@@ -3019,13 +3041,6 @@ export default function RaceMap() {
 
     if (!token) {
       setAutoLoopError("Mapbox token이 없습니다.");
-      return;
-    }
-
-    const targetDistanceM = parseAutoLoopTargetDistanceM();
-
-    if (!Number.isFinite(targetDistanceM) || targetDistanceM <= 0) {
-      setAutoLoopError("목표 거리를 올바르게 입력해 주세요.");
       return;
     }
 
@@ -3103,6 +3118,14 @@ export default function RaceMap() {
   async function handleGenerateOneWayCandidates() {
     if (isRunning) return;
 
+    const targetDistanceM = parseAutoLoopTargetDistanceM();
+
+    if (!Number.isFinite(targetDistanceM) || targetDistanceM <= 0) {
+      showTargetDistanceHint();
+      return;
+    }
+
+    hideTargetDistanceHint();
     setCandidateMode("oneWay");
     setAutoLoopError(null);
     setGpsActionError(null);
@@ -3127,13 +3150,6 @@ export default function RaceMap() {
 
     if (!token) {
       setAutoLoopError("Mapbox token이 없습니다.");
-      return;
-    }
-
-    const targetDistanceM = parseAutoLoopTargetDistanceM();
-
-    if (!Number.isFinite(targetDistanceM) || targetDistanceM <= 0) {
-      setAutoLoopError("목표 거리를 올바르게 입력해 주세요.");
       return;
     }
 
@@ -4089,7 +4105,10 @@ export default function RaceMap() {
                           <button
                             key={preset.value}
                             type="button"
-                            onClick={() => setAutoLoopTargetKm(preset.value)}
+                            onClick={() => {
+                              setAutoLoopTargetKm(preset.value);
+                              hideTargetDistanceHint();
+                            }}
                             disabled={isRunning || isGeneratingAnyCourse}
                             className={`rounded-lg px-3 py-2 text-xs font-black transition disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 ${
                               isActive
@@ -4103,13 +4122,29 @@ export default function RaceMap() {
                       })}
                     </div>
 
-                    <input
-                      value={autoLoopTargetKm}
-                      onChange={(event) => setAutoLoopTargetKm(event.target.value)}
-                      disabled={isRunning || isGeneratingAnyCourse}
-                      inputMode="decimal"
-                      className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 disabled:bg-slate-100"
-                    />
+                    <div className="relative">
+                      <input
+                        value={autoLoopTargetKm}
+                        onChange={(event) => {
+                          setAutoLoopTargetKm(event.target.value);
+                          hideTargetDistanceHint();
+                        }}
+                        onFocus={hideTargetDistanceHint}
+                        disabled={isRunning || isGeneratingAnyCourse}
+                        inputMode="decimal"
+                        className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 disabled:bg-slate-100"
+                      />
+
+                      {isTargetDistanceHintVisible && (
+                        <button
+                          type="button"
+                          onClick={hideTargetDistanceHint}
+                          className="target-distance-popover"
+                        >
+                          거리를 올바르게 입력해주십시오.
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   <div className="mt-2 grid grid-cols-1 gap-2">
@@ -5269,6 +5304,47 @@ export default function RaceMap() {
         .race-root button:disabled {
           transform: none;
           filter: none;
+        }
+
+
+        .target-distance-popover {
+          position: absolute;
+          left: 10px;
+          top: calc(100% + 10px);
+          z-index: 80;
+          max-width: min(270px, calc(100vw - 44px));
+          border: 1px solid rgba(255, 255, 255, 0.30);
+          border-radius: 16px;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(15, 23, 42, 0.90),
+              rgba(68, 52, 40, 0.76)
+            );
+          color: rgba(255, 255, 255, 0.96);
+          padding: 10px 12px;
+          text-align: left;
+          font-size: 12px;
+          font-weight: 900;
+          line-height: 1.35;
+          box-shadow:
+            0 14px 34px rgba(15, 23, 42, 0.26),
+            inset 0 1px 0 rgba(255, 255, 255, 0.18);
+          backdrop-filter: blur(18px) saturate(145%);
+          -webkit-backdrop-filter: blur(18px) saturate(145%);
+        }
+
+        .target-distance-popover::before {
+          content: "";
+          position: absolute;
+          top: -6px;
+          left: 18px;
+          width: 12px;
+          height: 12px;
+          transform: rotate(45deg);
+          border-left: 1px solid rgba(255, 255, 255, 0.30);
+          border-top: 1px solid rgba(255, 255, 255, 0.30);
+          background: rgba(15, 23, 42, 0.88);
         }
 
         @media (orientation: landscape) and (max-height: 560px) {
