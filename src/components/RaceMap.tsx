@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import mapboxgl from "mapbox-gl";
 import {
   generateAutoLoopCourseCandidates,
@@ -627,6 +627,30 @@ function getCandidateModeLabel(mode: CandidateMode): string {
 function formatPoint(point: LngLat | null): string {
   if (!point) return "미선택";
   return `${point[1].toFixed(5)}, ${point[0].toFixed(5)}`;
+}
+
+function getCustomDraftDistanceM(points: CustomCoursePoints): number | null {
+  if (!points.start || !points.finish) return null;
+
+  const waypoints = [
+    points.start,
+    ...(points.turnaround ? [points.turnaround] : []),
+    points.finish,
+  ];
+
+  let distanceM = 0;
+
+  for (let index = 1; index < waypoints.length; index += 1) {
+    distanceM += haversineDistanceM(waypoints[index - 1], waypoints[index]);
+  }
+
+  return distanceM;
+}
+
+function formatDraftDistance(distanceM: number | null): string {
+  if (distanceM === null || !Number.isFinite(distanceM)) return "시작점과 종료지점을 선택하세요.";
+  if (distanceM < 1000) return `${Math.round(distanceM)}m`;
+  return `${(distanceM / 1000).toFixed(2)}km`;
 }
 
 function getCustomStepLabel(step: CustomPointStep): string {
@@ -1382,11 +1406,16 @@ export default function RaceMap() {
   const latestGpsProjectionRef = useRef<LatestGpsProjection | null>(null);
   const elevationRunIdRef = useRef(0);
   const completionRecordedForRunRef = useRef(false);
+  const bottomSheetDragRef = useRef<{
+    sheet: "candidate" | "mapHud" | "custom";
+    startY: number;
+  } | null>(null);
 
   const [activePanel, setActivePanel] = useState<ActivePanel>("setup");
   const [setupView, setSetupView] = useState<SetupView>("main");
   const [isLeaderboardOpen, setIsLeaderboardOpen] = useState(true);
   const [isAutoLoopPanelCollapsed, setIsAutoLoopPanelCollapsed] = useState(false);
+  const [isCustomPanelCollapsed, setIsCustomPanelCollapsed] = useState(false);
   const [isRunSettingsOpen, setIsRunSettingsOpen] = useState(false);
   const [isTestPanelEnabled, setIsTestPanelEnabled] = useState(false);
 
@@ -1509,6 +1538,10 @@ export default function RaceMap() {
     Boolean(customPoints.start) &&
     Boolean(customPoints.finish) &&
     !isGeneratingCustomCourse;
+
+  const customDraftDistanceM = useMemo(() => {
+    return getCustomDraftDistanceM(customPoints);
+  }, [customPoints]);
 
   const isAutoLoopPanelVisible =
     isGeneratingAutoLoop ||
@@ -3108,6 +3141,7 @@ export default function RaceMap() {
     setCustomCourseError(null);
     setShouldSaveCustomCourse(true);
     setCustomCourseName("");
+    setIsCustomPanelCollapsed(false);
     clearCustomPointMarkers();
     setIsLeaderboardOpen(false);
     setActivePanel("map");
@@ -3586,6 +3620,52 @@ export default function RaceMap() {
       ? `정확도 ${currentMapLocationAccuracyM.toFixed(1)}m`
       : "정확도 -";
 
+  function handleBottomSheetDragStart(
+    sheet: "candidate" | "mapHud" | "custom",
+    event: PointerEvent<HTMLElement>
+  ) {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+
+    bottomSheetDragRef.current = {
+      sheet,
+      startY: event.clientY,
+    };
+
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+
+  function handleBottomSheetDragEnd(
+    sheet: "candidate" | "mapHud" | "custom",
+    event: PointerEvent<HTMLElement>
+  ) {
+    const drag = bottomSheetDragRef.current;
+
+    if (!drag || drag.sheet !== sheet) return;
+
+    const deltaY = event.clientY - drag.startY;
+    bottomSheetDragRef.current = null;
+
+    if (Math.abs(deltaY) < 38) return;
+
+    const shouldCollapse = deltaY > 0;
+
+    if (sheet === "candidate") {
+      setIsAutoLoopPanelCollapsed(shouldCollapse);
+      return;
+    }
+
+    if (sheet === "mapHud") {
+      setIsLeaderboardOpen(!shouldCollapse);
+      return;
+    }
+
+    setIsCustomPanelCollapsed(shouldCollapse);
+  }
+
+  function handleBottomSheetDragCancel() {
+    bottomSheetDragRef.current = null;
+  }
+
   function handleOpenFeedback() {
     if (FEEDBACK_FORM_URL) {
       window.open(FEEDBACK_FORM_URL, "_blank", "noopener,noreferrer");
@@ -4035,6 +4115,12 @@ export default function RaceMap() {
           : "",
         activePanel === "map" && isCustomCourseMode
           ? "race-root-custom-course-open"
+          : "",
+        activePanel === "map" && isCustomCourseMode && isCustomPanelCollapsed
+          ? "race-root-custom-course-collapsed"
+          : "",
+        activePanel === "map" && !isAutoLoopPanelVisible && !isCustomCourseMode
+          ? "race-root-map-hud-open"
           : "",
       ]
         .filter(Boolean)
@@ -4833,7 +4919,13 @@ export default function RaceMap() {
           }`}
           aria-label={`${candidateModeLabel} 후보 목록`}
         >
-          <div className="candidate-bottom-sheet-handle" aria-hidden="true" />
+          <div
+            className="candidate-bottom-sheet-handle bottom-sheet-drag-handle"
+            aria-hidden="true"
+            onPointerDown={(event) => handleBottomSheetDragStart("candidate", event)}
+            onPointerUp={(event) => handleBottomSheetDragEnd("candidate", event)}
+            onPointerCancel={handleBottomSheetDragCancel}
+          />
 
           <div className="candidate-bottom-sheet-header">
             <div className="min-w-0 flex-1">
@@ -5008,184 +5100,237 @@ export default function RaceMap() {
       )}
 
       {activePanel === "map" && isCustomCourseMode && (
-        <div className="race-panel race-custom-panel">
-          <div className="mb-2 flex items-start justify-between gap-3">
-            <div>
-              <div className="text-sm font-bold text-slate-900">
+        <section
+          className={`race-panel race-custom-panel race-custom-bottom-sheet ${
+            isCustomPanelCollapsed ? "race-custom-panel-collapsed" : ""
+          }`}
+          aria-label="커스텀 코스 생성"
+        >
+          <div
+            className="candidate-bottom-sheet-handle bottom-sheet-drag-handle"
+            aria-hidden="true"
+            onPointerDown={(event) => handleBottomSheetDragStart("custom", event)}
+            onPointerUp={(event) => handleBottomSheetDragEnd("custom", event)}
+            onPointerCancel={handleBottomSheetDragCancel}
+          />
+
+          <div className="custom-bottom-sheet-header">
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-black text-slate-900">
                 커스텀 코스 생성
               </div>
-              <div className="text-xs text-slate-500">
-                다음 선택: {getCustomStepLabel(customPointStep)}
+              <div className="text-xs font-semibold text-slate-500">
+                {isCustomPanelCollapsed
+                  ? `예상 길이 ${formatDraftDistance(customDraftDistanceM)}`
+                  : `다음 선택: ${getCustomStepLabel(customPointStep)}`}
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={handleCancelCustomCourseMode}
-              className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700"
-            >
-              취소
-            </button>
-          </div>
+            <div className="flex shrink-0 gap-1">
+              <button
+                type="button"
+                onClick={() => setIsCustomPanelCollapsed((value) => !value)}
+                className="candidate-sheet-control-button"
+              >
+                {isCustomPanelCollapsed ? "열기" : "접기"}
+              </button>
 
-          <div className="mb-3 rounded-lg bg-blue-50 p-2">
-            <button
-              type="button"
-              onClick={handleUseCurrentLocationAsCustomStart}
-              disabled={
-                isRunning ||
-                isGeneratingCustomCourse ||
-                isCenteringOnCurrentLocation ||
-                Boolean(customPoints.finish)
-              }
-              className="w-full rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
-            >
-              {isCenteringOnCurrentLocation ? "현재 위치 확인 중..." : "내 위치를 시작점으로"}
-            </button>
-            <div className="mt-1 text-[11px] text-blue-700">
-              GPS 상 현재 위치를 커스텀 코스의 시작지점으로 설정합니다. 종료지점이
-              이미 선택된 경우에는 전체 초기화 후 다시 설정하세요.
+              <button
+                type="button"
+                onClick={handleCancelCustomCourseMode}
+                className="candidate-sheet-control-button"
+              >
+                취소
+              </button>
             </div>
           </div>
 
-          <div className="space-y-2 rounded-lg bg-slate-50 p-2 text-xs text-slate-700">
-            {(["start", "turnaround", "finish"] as CustomPointStep[]).map(
-              (pointType) => {
-                const point = customPoints[pointType];
+          {!isCustomPanelCollapsed && (
+            <div className="custom-bottom-sheet-body">
+              <div className="custom-distance-summary-card">
+                <div className="text-[11px] font-bold text-slate-500">
+                  선택 지점 기준 예상 길이
+                </div>
+                <div className="mt-1 text-lg font-black text-slate-950">
+                  {formatDraftDistance(customDraftDistanceM)}
+                </div>
+                <div className="mt-1 text-[11px] font-semibold text-slate-500">
+                  시작점과 종료지점을 모두 고르면 즉시 계산됩니다. 마커를 드래그하면 이 값도 실시간으로 바뀝니다. 실제 보행 경로 거리는 코스 생성 후 확정됩니다.
+                </div>
+              </div>
 
-                return (
-                  <div
-                    key={pointType}
-                    className="flex items-center justify-between gap-2"
-                  >
-                    <div>
-                      <span className="font-semibold">
-                        {getCustomPointLabel(pointType)}:
-                      </span>{" "}
-                      {formatPoint(point)}
-                    </div>
+              <div className="mb-3 rounded-lg bg-blue-50 p-2">
+                <button
+                  type="button"
+                  onClick={handleUseCurrentLocationAsCustomStart}
+                  disabled={
+                    isRunning ||
+                    isGeneratingCustomCourse ||
+                    isCenteringOnCurrentLocation ||
+                    Boolean(customPoints.finish)
+                  }
+                  className="w-full rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  {isCenteringOnCurrentLocation ? "현재 위치 확인 중..." : "내 위치를 시작점으로"}
+                </button>
+                <div className="mt-1 text-[11px] text-blue-700">
+                  GPS 상 현재 위치를 커스텀 코스의 시작지점으로 설정합니다. 종료지점이
+                  이미 선택된 경우에는 전체 초기화 후 다시 설정하세요.
+                </div>
+              </div>
 
-                    <button
-                      type="button"
-                      onClick={() => removeCustomPoint(pointType)}
-                      disabled={!point}
-                      className="rounded-md bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      취소
-                    </button>
+              <div className="space-y-2 rounded-lg bg-slate-50 p-2 text-xs text-slate-700">
+                {(["start", "turnaround", "finish"] as CustomPointStep[]).map(
+                  (pointType) => {
+                    const point = customPoints[pointType];
+
+                    return (
+                      <div
+                        key={pointType}
+                        className="flex items-center justify-between gap-2"
+                      >
+                        <div>
+                          <span className="font-semibold">
+                            {getCustomPointLabel(pointType)}:
+                          </span>{" "}
+                          {formatPoint(point)}
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => removeCustomPoint(pointType)}
+                          disabled={!point}
+                          className="rounded-md bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          취소
+                        </button>
+                      </div>
+                    );
+                  }
+                )}
+              </div>
+
+              <div className="mt-3 rounded-lg bg-slate-50 p-2">
+                <label className="block space-y-1">
+                  <div className="text-xs font-medium text-slate-600">
+                    커스텀 코스 이름
                   </div>
-                );
-              }
-            )}
-          </div>
+                  <input
+                    value={customCourseName}
+                    onChange={(event) => setCustomCourseName(event.target.value)}
+                    placeholder="예: 학교 앞 3K 왕복"
+                    className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 outline-none focus:border-blue-500"
+                  />
+                </label>
 
-          <div className="mt-3 rounded-lg bg-slate-50 p-2">
-            <label className="block space-y-1">
-              <div className="text-xs font-medium text-slate-600">
-                커스텀 코스 이름
+                <label className="mt-3 flex items-start gap-2 rounded-lg bg-white p-2 text-xs text-slate-700 ring-1 ring-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={shouldSaveCustomCourse}
+                    onChange={(event) => setShouldSaveCustomCourse(event.target.checked)}
+                    disabled={isGeneratingCustomCourse}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <span className="block font-bold text-slate-900">
+                      나의 코스에 저장
+                    </span>
+                    <span className="block text-[11px] text-slate-500">
+                      체크를 끄면 이번에 만든 코스만 지도에 적용하고, 목록에는 저장하지 않습니다.
+                    </span>
+                  </span>
+                </label>
               </div>
-              <input
-                value={customCourseName}
-                onChange={(event) => setCustomCourseName(event.target.value)}
-                placeholder="예: 학교 앞 3K 왕복"
-                className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 outline-none focus:border-blue-500"
-              />
-            </label>
 
-            <label className="mt-3 flex items-start gap-2 rounded-lg bg-white p-2 text-xs text-slate-700 ring-1 ring-slate-200">
-              <input
-                type="checkbox"
-                checked={shouldSaveCustomCourse}
-                onChange={(event) => setShouldSaveCustomCourse(event.target.checked)}
-                disabled={isGeneratingCustomCourse}
-                className="mt-0.5"
-              />
-              <span>
-                <span className="block font-bold text-slate-900">
-                  나의 코스에 저장
-                </span>
-                <span className="block text-[11px] text-slate-500">
-                  체크를 끄면 이번에 만든 코스만 지도에 적용하고, 목록에는 저장하지 않습니다.
-                </span>
-              </span>
-            </label>
-          </div>
+              {customCourseError && (
+                <div className="mt-2 rounded-lg bg-red-50 p-2 text-xs text-red-700">
+                  {customCourseError}
+                </div>
+              )}
 
-          {customCourseError && (
-            <div className="mt-2 rounded-lg bg-red-50 p-2 text-xs text-red-700">
-              {customCourseError}
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={handleAddTurnaroundPoint}
+                  disabled={!customPoints.start || Boolean(customPoints.finish)}
+                  className="rounded-lg bg-orange-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  반환점 추가
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleUseStartAsFinish}
+                  disabled={!customPoints.start || !customPoints.turnaround}
+                  className="rounded-lg bg-slate-700 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  종료=시작
+                </button>
+              </div>
+
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={resetCustomCourseDraft}
+                  className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700"
+                >
+                  전체 초기화
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleBuildCustomCourse}
+                  disabled={!canBuildCustomCourse}
+                  className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  {isGeneratingCustomCourse
+                    ? "생성 중..."
+                    : shouldSaveCustomCourse
+                      ? "커스텀 코스 저장"
+                      : "저장 없이 코스 생성"}
+                </button>
+              </div>
+
+              <div className="mt-2 text-[11px] text-slate-500">
+                지도에서 시작점과 종료지점을 선택하세요. 반환점을 추가하면 왕복 또는 경유
+                코스로 만들 수 있습니다. 저장 옵션을 켜면 나의 코스에서 다시 불러올 수
+                있습니다.
+              </div>
             </div>
           )}
-
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={handleAddTurnaroundPoint}
-              disabled={!customPoints.start || Boolean(customPoints.finish)}
-              className="rounded-lg bg-orange-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
-            >
-              반환점 추가
-            </button>
-
-            <button
-              type="button"
-              onClick={handleUseStartAsFinish}
-              disabled={!customPoints.start || !customPoints.turnaround}
-              className="rounded-lg bg-slate-700 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
-            >
-              종료=시작
-            </button>
-          </div>
-
-          <div className="mt-2 grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={resetCustomCourseDraft}
-              className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700"
-            >
-              전체 초기화
-            </button>
-
-            <button
-              type="button"
-              onClick={handleBuildCustomCourse}
-              disabled={!canBuildCustomCourse}
-              className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
-            >
-              {isGeneratingCustomCourse
-                ? "생성 중..."
-                : shouldSaveCustomCourse
-                  ? "커스텀 코스 저장"
-                  : "저장 없이 코스 생성"}
-            </button>
-          </div>
-
-          <div className="mt-2 text-[11px] text-slate-500">
-            지도에서 시작점과 종료지점을 선택하세요. 반환점을 추가하면 왕복 또는 경유
-            코스로 만들 수 있습니다. 저장 옵션을 켜면 나의 코스에서 다시 불러올 수
-            있습니다.
-          </div>
-        </div>
+        </section>
       )}
 
-      {activePanel === "map" && !isAutoLoopPanelVisible && !isCustomCourseMode && (        <div
-          className={`race-panel race-map-hud ${
+      {activePanel === "map" && !isAutoLoopPanelVisible && !isCustomCourseMode && (
+        <section
+          className={`race-panel race-map-hud race-map-bottom-sheet ${
             isLeaderboardOpen ? "race-map-hud-open" : "race-map-hud-collapsed"
           }`}
+          aria-label="지도 러닝 정보"
         >
-          <div className="mb-2 flex items-start justify-between gap-3">
-            <div>
-              <div className="text-sm font-bold text-slate-900">
+          <div
+            className="candidate-bottom-sheet-handle bottom-sheet-drag-handle"
+            aria-hidden="true"
+            onPointerDown={(event) => handleBottomSheetDragStart("mapHud", event)}
+            onPointerUp={(event) => handleBottomSheetDragEnd("mapHud", event)}
+            onPointerCancel={handleBottomSheetDragCancel}
+          />
+
+          <div className="map-bottom-sheet-header">
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-black text-slate-900">
                 {isRunning ? "Race Running" : "Map View"}
               </div>
-              <div className="text-xs text-slate-500">{status}</div>
+              <div className="truncate text-xs font-semibold text-slate-500">
+                {status}
+              </div>
             </div>
 
             <div className="flex shrink-0 gap-1">
               <button
                 type="button"
                 onClick={() => setIsLeaderboardOpen((value) => !value)}
-                className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700"
+                className="candidate-sheet-control-button"
               >
                 {isLeaderboardOpen ? "접기" : "열기"}
               </button>
@@ -5196,40 +5341,40 @@ export default function RaceMap() {
                   setActivePanel("setup");
                   setSetupView("main");
                 }}
-                className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700"
+                className="candidate-sheet-control-button"
               >
                 설정
               </button>
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-2">
-            <div className="rounded-lg bg-slate-50 p-2">
-              <div className="text-xs text-slate-500">Elapsed</div>
-              <div className="font-mono text-base font-semibold text-slate-900">
-                {elapsedSec.toFixed(1)}s
-              </div>
-            </div>
-
-            <div className="rounded-lg bg-slate-50 p-2">
-              <div className="text-xs text-slate-500">My Rank</div>
-              <div className="font-mono text-base font-semibold text-slate-900">
-                {playerRank || "-"} / {sortedHud.length || "-"}
-              </div>
-            </div>
-
-            <div className="rounded-lg bg-slate-50 p-2">
-              <div className="text-xs text-slate-500">Gap</div>
-              <div className="font-mono text-base font-semibold text-slate-900">
-                {playerRank <= 1 ? "Lead" : `${gapToAhead.toFixed(0)}m`}
-              </div>
-            </div>
-          </div>
-
           {isLeaderboardOpen && (
-            <>
+            <div className="map-bottom-sheet-body">
+              <div className="grid grid-cols-3 gap-2">
+                <div className="rounded-lg bg-slate-50 p-2">
+                  <div className="text-xs text-slate-500">Elapsed</div>
+                  <div className="font-mono text-base font-semibold text-slate-900">
+                    {elapsedSec.toFixed(1)}s
+                  </div>
+                </div>
+
+                <div className="rounded-lg bg-slate-50 p-2">
+                  <div className="text-xs text-slate-500">My Rank</div>
+                  <div className="font-mono text-base font-semibold text-slate-900">
+                    {playerRank || "-"} / {sortedHud.length || "-"}
+                  </div>
+                </div>
+
+                <div className="rounded-lg bg-slate-50 p-2">
+                  <div className="text-xs text-slate-500">Gap</div>
+                  <div className="font-mono text-base font-semibold text-slate-900">
+                    {playerRank <= 1 ? "Lead" : `${gapToAhead.toFixed(0)}m`}
+                  </div>
+                </div>
+              </div>
+
               <div className="mt-2 text-xs text-slate-500">
-                Course: {activeCourse.name} · length:{" "}
+                Course: {activeCourse.name} · length: {" "}
                 {(courseLengthM / 1000).toFixed(2)} km
               </div>
 
@@ -5260,7 +5405,7 @@ export default function RaceMap() {
                     </div>
 
                     <div className="mt-1 text-xs text-slate-600">
-                      {(runner.distanceM / 1000).toFixed(2)} km ·{" "}
+                      {(runner.distanceM / 1000).toFixed(2)} km · {" "}
                       {runner.progressPercent.toFixed(1)}%
                       {runner.finished ? " · Finished" : ""}
                     </div>
@@ -5268,9 +5413,7 @@ export default function RaceMap() {
                     <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
                       <div
                         className={`h-full rounded-full ${
-                          runner.type === "player"
-                            ? "bg-green-600"
-                            : "bg-blue-600"
+                          runner.type === "player" ? "bg-green-600" : "bg-blue-600"
                         }`}
                         style={{
                           width: `${Math.min(runner.progressPercent, 100)}%`,
@@ -5280,28 +5423,28 @@ export default function RaceMap() {
                   </div>
                 ))}
               </div>
-            </>
+
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={handleOpenRunSettings}
+                  disabled={!isMapLoaded || isRunning || !hasActiveCourse}
+                  className="rounded-xl bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  이 코스로 달리기
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleResetRace}
+                  className="rounded-xl bg-slate-800 px-3 py-2 text-sm font-semibold text-white"
+                >
+                  Reset
+                </button>
+              </div>
+            </div>
           )}
-
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={handleOpenRunSettings}
-              disabled={!isMapLoaded || isRunning || !hasActiveCourse}
-              className="rounded-xl bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
-            >
-              이 코스로 달리기
-            </button>
-
-            <button
-              type="button"
-              onClick={handleResetRace}
-              className="rounded-xl bg-slate-800 px-3 py-2 text-sm font-semibold text-white"
-            >
-              Reset
-            </button>
-          </div>
-        </div>
+        </section>
       )}
 
       <style jsx global>{`
@@ -8324,6 +8467,173 @@ export default function RaceMap() {
 
           .race-candidate-bottom-sheet-collapsed .candidate-bottom-sheet-header {
             min-height: 0;
+          }
+        }
+
+
+        /* =========================================================
+           Bottom sheet stabilization pass
+           - Candidate, Map HUD, and Custom Course panels all anchor to bottom
+           - Drag handle supports swipe up/down collapse state
+           - Custom course shows live point-based estimated length
+           ========================================================= */
+        .bottom-sheet-drag-handle {
+          touch-action: none;
+          cursor: grab;
+          user-select: none;
+        }
+
+        .bottom-sheet-drag-handle:active {
+          cursor: grabbing;
+        }
+
+        .race-map-bottom-sheet,
+        .race-custom-bottom-sheet,
+        .race-candidate-bottom-sheet {
+          position: absolute !important;
+          z-index: 45 !important;
+          top: auto !important;
+          left: max(8px, env(safe-area-inset-left)) !important;
+          right: max(8px, env(safe-area-inset-right)) !important;
+          bottom: max(10px, env(safe-area-inset-bottom)) !important;
+          width: auto !important;
+          transform: none !important;
+          border-radius: 26px 26px 22px 22px !important;
+          padding: 9px !important;
+          overflow: hidden !important;
+        }
+
+        .race-map-bottom-sheet.race-map-hud-open {
+          max-height: min(58dvh, 480px) !important;
+        }
+
+        .race-map-bottom-sheet.race-map-hud-collapsed {
+          max-height: none !important;
+          height: auto !important;
+        }
+
+        .race-custom-bottom-sheet {
+          max-height: min(72dvh, 620px) !important;
+        }
+
+        .race-custom-bottom-sheet.race-custom-panel-collapsed {
+          max-height: none !important;
+          height: auto !important;
+        }
+
+        .map-bottom-sheet-header,
+        .custom-bottom-sheet-header {
+          position: relative;
+          z-index: 1;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          border-radius: 20px;
+          padding: 10px;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.42),
+              rgba(255, 255, 255, 0.14)
+            );
+          border: 1px solid rgba(255, 255, 255, 0.52);
+          backdrop-filter: blur(20px) saturate(170%);
+          -webkit-backdrop-filter: blur(20px) saturate(170%);
+        }
+
+        .map-bottom-sheet-body,
+        .custom-bottom-sheet-body,
+        .candidate-bottom-sheet-body {
+          position: relative;
+          z-index: 1;
+          max-height: calc(min(72dvh, 620px) - 94px);
+          overflow-y: auto;
+          padding: 9px 1px 1px;
+          -webkit-overflow-scrolling: touch;
+        }
+
+        .map-bottom-sheet-body {
+          max-height: calc(min(58dvh, 480px) - 94px);
+        }
+
+        .custom-distance-summary-card {
+          border: 1px solid rgba(255, 255, 255, 0.62);
+          border-radius: 18px;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.58),
+              rgba(255, 255, 255, 0.18)
+            );
+          padding: 11px 12px;
+          margin-bottom: 10px;
+          box-shadow:
+            0 10px 24px rgba(15, 23, 42, 0.08),
+            inset 0 1px 0 rgba(255, 255, 255, 0.78);
+          backdrop-filter: blur(20px) saturate(170%);
+          -webkit-backdrop-filter: blur(20px) saturate(170%);
+        }
+
+        .race-map-bottom-sheet .candidate-bottom-sheet-handle,
+        .race-custom-bottom-sheet .candidate-bottom-sheet-handle {
+          width: 46px;
+          height: 5px;
+          border-radius: 9999px;
+          margin: 1px auto 8px;
+          background: rgba(15, 23, 42, 0.24);
+          box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+        }
+
+        .race-map-hud-collapsed .map-bottom-sheet-header,
+        .race-custom-panel-collapsed .custom-bottom-sheet-header,
+        .race-candidate-bottom-sheet-collapsed .candidate-bottom-sheet-header {
+          min-height: 68px;
+        }
+
+        @media (min-width: 768px) {
+          .race-map-bottom-sheet,
+          .race-custom-bottom-sheet,
+          .race-candidate-bottom-sheet {
+            left: 50% !important;
+            right: auto !important;
+            width: min(620px, calc(100vw - 32px)) !important;
+            transform: translateX(-50%) !important;
+          }
+
+          .race-map-bottom-sheet.race-map-hud-collapsed,
+          .race-custom-bottom-sheet.race-custom-panel-collapsed,
+          .race-candidate-bottom-sheet-collapsed {
+            width: min(520px, calc(100vw - 32px)) !important;
+          }
+        }
+
+        @media (orientation: landscape) and (max-height: 560px) {
+          .race-map-bottom-sheet,
+          .race-custom-bottom-sheet,
+          .race-candidate-bottom-sheet {
+            top: auto !important;
+            bottom: max(8px, env(safe-area-inset-bottom)) !important;
+            left: max(8px, env(safe-area-inset-left)) !important;
+            right: max(8px, env(safe-area-inset-right)) !important;
+            width: auto !important;
+            max-height: min(74dvh, calc(100dvh - 92px)) !important;
+            transform: none !important;
+          }
+        }
+
+        @media (max-width: 420px) {
+          .map-bottom-sheet-header,
+          .custom-bottom-sheet-header {
+            align-items: stretch;
+            flex-direction: column;
+          }
+
+          .map-bottom-sheet-header > .flex,
+          .custom-bottom-sheet-header > .flex {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            width: 100%;
           }
         }
 
