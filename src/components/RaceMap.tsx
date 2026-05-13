@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent,
+} from "react";
 import mapboxgl from "mapbox-gl";
 import {
   generateAutoLoopCourseCandidates,
@@ -21,6 +28,8 @@ type PlayerMode = "pace" | "gps";
 type ActivePanel = "setup" | "map";
 type SetupView = "main" | "myCourses";
 type CandidateMode = "outAndBack" | "oneWay";
+type CustomRouteMode = "oneWay" | "outAndBack";
+type BottomSheetKind = "candidate" | "mapHud" | "custom";
 type CustomPointStep = "start" | "turnaround" | "finish";
 type CustomGuide =
   | "select-start"
@@ -629,22 +638,15 @@ function formatPoint(point: LngLat | null): string {
   return `${point[1].toFixed(5)}, ${point[0].toFixed(5)}`;
 }
 
-function getCustomDraftDistanceM(points: CustomCoursePoints): number | null {
+function getCustomDraftDistanceM(
+  points: CustomCoursePoints,
+  routeMode: CustomRouteMode
+): number | null {
   if (!points.start || !points.finish) return null;
 
-  const waypoints = [
-    points.start,
-    ...(points.turnaround ? [points.turnaround] : []),
-    points.finish,
-  ];
+  const oneWayDistanceM = haversineDistanceM(points.start, points.finish);
 
-  let distanceM = 0;
-
-  for (let index = 1; index < waypoints.length; index += 1) {
-    distanceM += haversineDistanceM(waypoints[index - 1], waypoints[index]);
-  }
-
-  return distanceM;
+  return routeMode === "outAndBack" ? oneWayDistanceM * 2 : oneWayDistanceM;
 }
 
 function formatDraftDistance(distanceM: number | null): string {
@@ -1407,8 +1409,10 @@ export default function RaceMap() {
   const elevationRunIdRef = useRef(0);
   const completionRecordedForRunRef = useRef(false);
   const bottomSheetDragRef = useRef<{
-    sheet: "candidate" | "mapHud" | "custom";
+    sheet: BottomSheetKind;
     startY: number;
+    lastY: number;
+    startCollapsed: boolean;
   } | null>(null);
 
   const [activePanel, setActivePanel] = useState<ActivePanel>("setup");
@@ -1416,6 +1420,16 @@ export default function RaceMap() {
   const [isLeaderboardOpen, setIsLeaderboardOpen] = useState(true);
   const [isAutoLoopPanelCollapsed, setIsAutoLoopPanelCollapsed] = useState(false);
   const [isCustomPanelCollapsed, setIsCustomPanelCollapsed] = useState(false);
+  const [bottomSheetDragOffsetY, setBottomSheetDragOffsetY] = useState<
+    Record<BottomSheetKind, number>
+  >({
+    candidate: 0,
+    mapHud: 0,
+    custom: 0,
+  });
+  const [draggingSheet, setDraggingSheet] = useState<BottomSheetKind | null>(
+    null
+  );
   const [isRunSettingsOpen, setIsRunSettingsOpen] = useState(false);
   const [isTestPanelEnabled, setIsTestPanelEnabled] = useState(false);
 
@@ -1486,6 +1500,8 @@ export default function RaceMap() {
   );
   const [shouldSaveCustomCourse, setShouldSaveCustomCourse] = useState(true);
   const [customCourseName, setCustomCourseName] = useState("");
+  const [customRouteMode, setCustomRouteMode] =
+    useState<CustomRouteMode>("oneWay");
 
   const [runnerHud, setRunnerHud] = useState<RunnerHudState[]>([]);
   const [isSecureContextState, setIsSecureContextState] = useState<
@@ -1540,8 +1556,8 @@ export default function RaceMap() {
     !isGeneratingCustomCourse;
 
   const customDraftDistanceM = useMemo(() => {
-    return getCustomDraftDistanceM(customPoints);
-  }, [customPoints]);
+    return getCustomDraftDistanceM(customPoints, customRouteMode);
+  }, [customPoints, customRouteMode]);
 
   const isAutoLoopPanelVisible =
     isGeneratingAutoLoop ||
@@ -2186,8 +2202,8 @@ export default function RaceMap() {
 
     if (type === "start") {
       setCustomPointStep("finish");
-      setCustomGuide("add-turnaround");
-      setStatus("시작지점 선택 완료");
+      setCustomGuide("select-finish");
+      setStatus("시작지점 선택 완료 · 목표지점을 선택하세요.");
       return;
     }
 
@@ -2234,6 +2250,7 @@ export default function RaceMap() {
     setCustomGuide("select-start");
     setCustomPoints(INITIAL_CUSTOM_POINTS);
     setCustomCourseError(null);
+    setCustomRouteMode("oneWay");
     clearCustomPointMarkers();
     setStatus("수동 코스 지점을 초기화했습니다.");
   }
@@ -3141,6 +3158,7 @@ export default function RaceMap() {
     setCustomCourseError(null);
     setShouldSaveCustomCourse(true);
     setCustomCourseName("");
+    setCustomRouteMode("oneWay");
     setIsCustomPanelCollapsed(false);
     clearCustomPointMarkers();
     setIsLeaderboardOpen(false);
@@ -3155,6 +3173,7 @@ export default function RaceMap() {
     setCustomGuide(null);
     setCustomPoints(INITIAL_CUSTOM_POINTS);
     setCustomCourseError(null);
+    setCustomRouteMode("oneWay");
     clearCustomPointMarkers();
     setStatus("수동 코스 생성을 취소했습니다.");
   }
@@ -3211,11 +3230,14 @@ export default function RaceMap() {
     }
 
     const trimmedName = customCourseName.trim();
+    const routeModeLabel = customRouteMode === "outAndBack" ? "왕복" : "편도";
     const finalName =
-      trimmedName ||
-      `커스텀 코스 ${sortedCourseLibrary.length + 1} · ${
-        customPoints.turnaround ? "경유" : "편도"
-      }`;
+      trimmedName || `커스텀 코스 ${sortedCourseLibrary.length + 1} · ${routeModeLabel}`;
+
+    const routeTurnaround =
+      customRouteMode === "outAndBack" ? customPoints.finish : null;
+    const routeFinish =
+      customRouteMode === "outAndBack" ? customPoints.start : customPoints.finish;
 
     try {
       setIsGeneratingCustomCourse(true);
@@ -3224,8 +3246,8 @@ export default function RaceMap() {
 
       const nextCourse = await generateCustomWalkingCourse({
         start: customPoints.start,
-        turnaround: customPoints.turnaround,
-        finish: customPoints.finish,
+        turnaround: routeTurnaround,
+        finish: routeFinish,
         token,
         name: finalName,
       });
@@ -3236,7 +3258,7 @@ export default function RaceMap() {
         storedCustomCourse = makeStoredCourseRecord({
           course: nextCourse,
           name: finalName,
-          turnaround: customPoints.turnaround,
+          turnaround: routeTurnaround,
           source: "custom",
           courseMode: "custom",
         });
@@ -3256,7 +3278,7 @@ export default function RaceMap() {
       setCustomCourseName("");
       setActiveCourseMode("custom");
       setActiveCourseOriginId(storedCustomCourse?.courseId ?? null);
-      setActiveCourseTurnaround(customPoints.turnaround);
+      setActiveCourseTurnaround(routeTurnaround);
       setActiveCourse(nextCourse);
       setActivePanel("map");
       setSetupView("main");
@@ -3620,35 +3642,16 @@ export default function RaceMap() {
       ? `정확도 ${currentMapLocationAccuracyM.toFixed(1)}m`
       : "정확도 -";
 
-  function handleBottomSheetDragStart(
-    sheet: "candidate" | "mapHud" | "custom",
-    event: PointerEvent<HTMLElement>
-  ) {
-    if (event.pointerType === "mouse" && event.button !== 0) return;
-
-    bottomSheetDragRef.current = {
-      sheet,
-      startY: event.clientY,
-    };
-
-    event.currentTarget.setPointerCapture?.(event.pointerId);
+  function getBottomSheetCollapsedState(sheet: BottomSheetKind): boolean {
+    if (sheet === "candidate") return isAutoLoopPanelCollapsed;
+    if (sheet === "mapHud") return !isLeaderboardOpen;
+    return isCustomPanelCollapsed;
   }
 
-  function handleBottomSheetDragEnd(
-    sheet: "candidate" | "mapHud" | "custom",
-    event: PointerEvent<HTMLElement>
+  function setBottomSheetCollapsedState(
+    sheet: BottomSheetKind,
+    shouldCollapse: boolean
   ) {
-    const drag = bottomSheetDragRef.current;
-
-    if (!drag || drag.sheet !== sheet) return;
-
-    const deltaY = event.clientY - drag.startY;
-    bottomSheetDragRef.current = null;
-
-    if (Math.abs(deltaY) < 38) return;
-
-    const shouldCollapse = deltaY > 0;
-
     if (sheet === "candidate") {
       setIsAutoLoopPanelCollapsed(shouldCollapse);
       return;
@@ -3662,8 +3665,94 @@ export default function RaceMap() {
     setIsCustomPanelCollapsed(shouldCollapse);
   }
 
-  function handleBottomSheetDragCancel() {
+  function resetBottomSheetDragOffset(sheet: BottomSheetKind) {
+    setBottomSheetDragOffsetY((current) => ({
+      ...current,
+      [sheet]: 0,
+    }));
+  }
+
+  function getBottomSheetDragStyle(sheet: BottomSheetKind): CSSProperties {
+    return {
+      "--sheet-drag-y": `${bottomSheetDragOffsetY[sheet]}px`,
+      transition: draggingSheet === sheet ? "none" : undefined,
+    } as CSSProperties;
+  }
+
+  function handleBottomSheetDragStart(
+    sheet: BottomSheetKind,
+    event: PointerEvent<HTMLElement>
+  ) {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+
+    const startCollapsed = getBottomSheetCollapsedState(sheet);
+
+    bottomSheetDragRef.current = {
+      sheet,
+      startY: event.clientY,
+      lastY: event.clientY,
+      startCollapsed,
+    };
+
+    resetBottomSheetDragOffset(sheet);
+    setDraggingSheet(sheet);
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+
+  function handleBottomSheetDragMove(
+    sheet: BottomSheetKind,
+    event: PointerEvent<HTMLElement>
+  ) {
+    const drag = bottomSheetDragRef.current;
+
+    if (!drag || drag.sheet !== sheet) return;
+
+    drag.lastY = event.clientY;
+
+    const rawDeltaY = event.clientY - drag.startY;
+    const minDeltaY = drag.startCollapsed ? -260 : -42;
+    const maxDeltaY = drag.startCollapsed ? 70 : 300;
+    const nextOffsetY = Math.max(minDeltaY, Math.min(maxDeltaY, rawDeltaY));
+
+    setBottomSheetDragOffsetY((current) => ({
+      ...current,
+      [sheet]: nextOffsetY,
+    }));
+  }
+
+  function handleBottomSheetDragEnd(
+    sheet: BottomSheetKind,
+    event: PointerEvent<HTMLElement>
+  ) {
+    const drag = bottomSheetDragRef.current;
+
+    if (!drag || drag.sheet !== sheet) return;
+
+    const deltaY = drag.lastY - drag.startY;
     bottomSheetDragRef.current = null;
+
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    setDraggingSheet(null);
+    resetBottomSheetDragOffset(sheet);
+
+    if (deltaY <= -54) {
+      setBottomSheetCollapsedState(sheet, false);
+      return;
+    }
+
+    if (deltaY >= 54) {
+      setBottomSheetCollapsedState(sheet, true);
+    }
+  }
+
+  function handleBottomSheetDragCancel() {
+    const drag = bottomSheetDragRef.current;
+    bottomSheetDragRef.current = null;
+    setDraggingSheet(null);
+
+    if (drag) {
+      resetBottomSheetDragOffset(drag.sheet);
+    }
   }
 
   function handleOpenFeedback() {
@@ -4918,11 +5007,13 @@ export default function RaceMap() {
             isAutoLoopPanelCollapsed ? "race-candidate-bottom-sheet-collapsed" : ""
           }`}
           aria-label={`${candidateModeLabel} 후보 목록`}
+          style={getBottomSheetDragStyle("candidate")}
         >
           <div
             className="candidate-bottom-sheet-handle bottom-sheet-drag-handle"
             aria-hidden="true"
             onPointerDown={(event) => handleBottomSheetDragStart("candidate", event)}
+            onPointerMove={(event) => handleBottomSheetDragMove("candidate", event)}
             onPointerUp={(event) => handleBottomSheetDragEnd("candidate", event)}
             onPointerCancel={handleBottomSheetDragCancel}
           />
@@ -5105,11 +5196,13 @@ export default function RaceMap() {
             isCustomPanelCollapsed ? "race-custom-panel-collapsed" : ""
           }`}
           aria-label="커스텀 코스 생성"
+          style={getBottomSheetDragStyle("custom")}
         >
           <div
             className="candidate-bottom-sheet-handle bottom-sheet-drag-handle"
             aria-hidden="true"
             onPointerDown={(event) => handleBottomSheetDragStart("custom", event)}
+            onPointerMove={(event) => handleBottomSheetDragMove("custom", event)}
             onPointerUp={(event) => handleBottomSheetDragEnd("custom", event)}
             onPointerCancel={handleBottomSheetDragCancel}
           />
@@ -5122,7 +5215,9 @@ export default function RaceMap() {
               <div className="text-xs font-semibold text-slate-500">
                 {isCustomPanelCollapsed
                   ? `예상 길이 ${formatDraftDistance(customDraftDistanceM)}`
-                  : `다음 선택: ${getCustomStepLabel(customPointStep)}`}
+                  : customRouteMode === "outAndBack" && customPointStep === "finish"
+                    ? "다음 선택: 반환점 겸 회차 지점"
+                    : `다음 선택: ${getCustomStepLabel(customPointStep)}`}
               </div>
             </div>
 
@@ -5155,7 +5250,42 @@ export default function RaceMap() {
                   {formatDraftDistance(customDraftDistanceM)}
                 </div>
                 <div className="mt-1 text-[11px] font-semibold text-slate-500">
-                  시작점과 종료지점을 모두 고르면 즉시 계산됩니다. 마커를 드래그하면 이 값도 실시간으로 바뀝니다. 실제 보행 경로 거리는 코스 생성 후 확정됩니다.
+                  시작점과 목표지점을 모두 고르면 즉시 계산됩니다. 왕복을 선택하면 시작점↔목표지점 거리를 2배로 계산합니다. 마커를 드래그하면 이 값도 실시간으로 바뀝니다. 실제 보행 경로 거리는 코스 생성 후 확정됩니다.
+                </div>
+              </div>
+
+              <div className="custom-route-mode-toggle-card">
+                <div className="mb-2 text-xs font-black text-slate-900">
+                  코스 방식
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setCustomRouteMode("oneWay")}
+                    disabled={isGeneratingCustomCourse}
+                    className={`liquid-choice-button rounded-xl px-3 py-3 text-sm font-black disabled:cursor-not-allowed ${
+                      customRouteMode === "oneWay"
+                        ? "liquid-selected-control"
+                        : "liquid-clear-control"
+                    }`}
+                  >
+                    편도
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCustomRouteMode("outAndBack")}
+                    disabled={isGeneratingCustomCourse}
+                    className={`liquid-choice-button rounded-xl px-3 py-3 text-sm font-black disabled:cursor-not-allowed ${
+                      customRouteMode === "outAndBack"
+                        ? "liquid-selected-control"
+                        : "liquid-clear-control"
+                    }`}
+                  >
+                    왕복
+                  </button>
+                </div>
+                <div className="mt-2 text-[11px] font-semibold text-slate-500">
+                  편도는 시작점에서 목표지점까지, 왕복은 목표지점까지 갔다가 시작점으로 돌아오는 코스로 생성합니다.
                 </div>
               </div>
 
@@ -5180,34 +5310,34 @@ export default function RaceMap() {
               </div>
 
               <div className="space-y-2 rounded-lg bg-slate-50 p-2 text-xs text-slate-700">
-                {(["start", "turnaround", "finish"] as CustomPointStep[]).map(
-                  (pointType) => {
-                    const point = customPoints[pointType];
+                {(["start", "finish"] as CustomPointStep[]).map((pointType) => {
+                  const point = customPoints[pointType];
+                  const pointLabel =
+                    pointType === "finish" && customRouteMode === "outAndBack"
+                      ? "반환점"
+                      : getCustomPointLabel(pointType);
 
-                    return (
-                      <div
-                        key={pointType}
-                        className="flex items-center justify-between gap-2"
-                      >
-                        <div>
-                          <span className="font-semibold">
-                            {getCustomPointLabel(pointType)}:
-                          </span>{" "}
-                          {formatPoint(point)}
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => removeCustomPoint(pointType)}
-                          disabled={!point}
-                          className="rounded-md bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          취소
-                        </button>
+                  return (
+                    <div
+                      key={pointType}
+                      className="flex items-center justify-between gap-2"
+                    >
+                      <div>
+                        <span className="font-semibold">{pointLabel}:</span>{" "}
+                        {formatPoint(point)}
                       </div>
-                    );
-                  }
-                )}
+
+                      <button
+                        type="button"
+                        onClick={() => removeCustomPoint(pointType)}
+                        disabled={!point}
+                        className="rounded-md bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        취소
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
 
               <div className="mt-3 rounded-lg bg-slate-50 p-2">
@@ -5248,26 +5378,6 @@ export default function RaceMap() {
                 </div>
               )}
 
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={handleAddTurnaroundPoint}
-                  disabled={!customPoints.start || Boolean(customPoints.finish)}
-                  className="rounded-lg bg-orange-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
-                >
-                  반환점 추가
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleUseStartAsFinish}
-                  disabled={!customPoints.start || !customPoints.turnaround}
-                  className="rounded-lg bg-slate-700 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
-                >
-                  종료=시작
-                </button>
-              </div>
-
               <div className="mt-2 grid grid-cols-2 gap-2">
                 <button
                   type="button"
@@ -5292,9 +5402,7 @@ export default function RaceMap() {
               </div>
 
               <div className="mt-2 text-[11px] text-slate-500">
-                지도에서 시작점과 종료지점을 선택하세요. 반환점을 추가하면 왕복 또는 경유
-                코스로 만들 수 있습니다. 저장 옵션을 켜면 나의 코스에서 다시 불러올 수
-                있습니다.
+                지도에서 시작점과 목표지점을 선택하세요. 편도는 목표지점에서 끝나고, 왕복은 목표지점에서 돌아와 시작점으로 종료됩니다. 저장 옵션을 켜면 나의 코스에서 다시 불러올 수 있습니다.
               </div>
             </div>
           )}
@@ -5307,11 +5415,13 @@ export default function RaceMap() {
             isLeaderboardOpen ? "race-map-hud-open" : "race-map-hud-collapsed"
           }`}
           aria-label="지도 러닝 정보"
+          style={getBottomSheetDragStyle("mapHud")}
         >
           <div
             className="candidate-bottom-sheet-handle bottom-sheet-drag-handle"
             aria-hidden="true"
             onPointerDown={(event) => handleBottomSheetDragStart("mapHud", event)}
+            onPointerMove={(event) => handleBottomSheetDragMove("mapHud", event)}
             onPointerUp={(event) => handleBottomSheetDragEnd("mapHud", event)}
             onPointerCancel={handleBottomSheetDragCancel}
           />
@@ -8635,6 +8745,78 @@ export default function RaceMap() {
             grid-template-columns: 1fr 1fr;
             width: 100%;
           }
+        }
+
+
+        /* =========================================================
+           Pointer-follow bottom sheet drag + custom route mode toggle
+           ========================================================= */
+        .race-map-bottom-sheet,
+        .race-custom-bottom-sheet,
+        .race-candidate-bottom-sheet {
+          transform: translateY(var(--sheet-drag-y, 0px)) !important;
+          transition:
+            transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+            max-height 180ms ease,
+            height 180ms ease;
+          will-change: transform;
+        }
+
+        @media (min-width: 768px) {
+          .race-map-bottom-sheet,
+          .race-custom-bottom-sheet,
+          .race-candidate-bottom-sheet {
+            transform: translateX(-50%) translateY(var(--sheet-drag-y, 0px)) !important;
+          }
+        }
+
+        @media (orientation: landscape) and (max-height: 560px) {
+          .race-map-bottom-sheet,
+          .race-custom-bottom-sheet,
+          .race-candidate-bottom-sheet {
+            transform: translateY(var(--sheet-drag-y, 0px)) !important;
+          }
+        }
+
+        .custom-route-mode-toggle-card {
+          border: 1px solid rgba(255, 255, 255, 0.62);
+          border-radius: 18px;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.58),
+              rgba(255, 255, 255, 0.18)
+            );
+          padding: 11px 12px;
+          margin-bottom: 10px;
+          box-shadow:
+            0 10px 24px rgba(15, 23, 42, 0.08),
+            inset 0 1px 0 rgba(255, 255, 255, 0.78);
+          backdrop-filter: blur(20px) saturate(170%);
+          -webkit-backdrop-filter: blur(20px) saturate(170%);
+        }
+
+        .race-custom-bottom-sheet .liquid-selected-control:not(:disabled) {
+          border-color: rgba(255, 255, 255, 0.52) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(15, 23, 42, 0.90),
+              rgba(30, 41, 59, 0.66)
+            ) !important;
+          color: rgba(255, 255, 255, 0.98) !important;
+          text-shadow: 0 1px 2px rgba(0, 0, 0, 0.28) !important;
+        }
+
+        .race-custom-bottom-sheet .liquid-clear-control:not(:disabled) {
+          border-color: rgba(255, 255, 255, 0.72) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.36),
+              rgba(255, 255, 255, 0.10)
+            ) !important;
+          color: #0f172a !important;
         }
 
       `}</style>
