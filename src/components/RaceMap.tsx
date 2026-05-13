@@ -4511,6 +4511,66 @@ export default function RaceMap() {
                   코스를 고른 뒤 GPS 기록 방식과 가상 페이스메이커를 선택하고 시작하세요.
                 </div>
 
+                <div className="mt-3 rounded-xl border border-white/60 bg-white/35 p-2">
+                  <div className="mb-2 text-xs font-black text-slate-900">
+                    기록 방식
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPlayerMode("gps")}
+                      disabled={isRunning}
+                      className={`liquid-choice-button rounded-xl px-3 py-3 text-sm font-black disabled:cursor-not-allowed ${
+                        playerMode === "gps"
+                          ? "liquid-selected-control"
+                          : "liquid-clear-control"
+                      }`}
+                    >
+                      GPS로 실제 달리기
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setPlayerMode("pace")}
+                      disabled={isRunning}
+                      className={`liquid-choice-button rounded-xl px-3 py-3 text-sm font-black disabled:cursor-not-allowed ${
+                        playerMode === "pace"
+                          ? "liquid-selected-control"
+                          : "liquid-clear-control"
+                      }`}
+                    >
+                      페이스 입력 테스트
+                    </button>
+                  </div>
+
+                  {playerMode === "gps" ? (
+                    <div className="mt-2 text-[11px] font-semibold text-slate-500">
+                      실제 위치 이동을 기준으로 거리와 페이스를 기록합니다.
+                      {isGpsBlockedBySecurity && (
+                        <span className="mt-1 block text-red-600">
+                          GPS는 HTTPS 배포 주소 또는 localhost에서만 사용할 수 있습니다.
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <label className="mt-2 block space-y-1">
+                      <div className="text-[11px] font-semibold text-slate-500">
+                        테스트용 내 페이스
+                      </div>
+                      <input
+                        value={paceInput}
+                        onChange={(event) => setPaceInput(event.target.value)}
+                        disabled={isRunning}
+                        placeholder="5:30"
+                        className="w-full rounded-xl border border-white/60 bg-white/40 px-3 py-2 text-sm font-bold text-slate-900 outline-none disabled:cursor-not-allowed"
+                      />
+                      <div className="text-[11px] font-semibold text-slate-500">
+                        입력 페이스: {formatPace(playerPaceSecPerKm)}
+                      </div>
+                    </label>
+                  )}
+                </div>
+
                 <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <button
                     type="button"
