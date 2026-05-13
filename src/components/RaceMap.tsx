@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
-import { HAN_RIVER_YEOUIDO_5K } from "@/lib/courses/hanRiver";
 import {
   generateAutoLoopCourseCandidates,
   generateCustomWalkingCourse,
@@ -85,11 +84,13 @@ const SAVED_COURSES_STORAGE_KEY = "runbot:savedCourses:v1";
 const AUTO_LOOP_PAGE_SIZE = 5;
 const AUTO_LOOP_COLORS = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#3b82f6"];
 
+const DEFAULT_CENTER: LngLat = [126.9205, 37.5297];
+
 const DEFAULT_COURSE: Course = {
-  id: HAN_RIVER_YEOUIDO_5K.id,
-  name: HAN_RIVER_YEOUIDO_5K.name,
-  distanceM: HAN_RIVER_YEOUIDO_5K.distanceM,
-  polyline: HAN_RIVER_YEOUIDO_5K.polyline,
+  id: "no-course-selected",
+  name: "코스 미선택",
+  distanceM: 0,
+  polyline: [DEFAULT_CENTER, DEFAULT_CENTER],
 };
 
 const INITIAL_CUSTOM_POINTS: CustomCoursePoints = {
@@ -97,6 +98,10 @@ const INITIAL_CUSTOM_POINTS: CustomCoursePoints = {
   turnaround: null,
   finish: null,
 };
+
+function isRunnableCourse(course: Course): boolean {
+  return course.polyline.length >= 2 && getPolylineLengthM(course.polyline) > 1;
+}
 
 function parsePaceInput(input: string): number {
   const trimmed = input.trim();
@@ -515,6 +520,10 @@ export default function RaceMap() {
     return getPolylineLengthM(activeCourse.polyline);
   }, [activeCourse]);
 
+  const hasActiveCourse = useMemo(() => {
+    return isRunnableCourse(activeCourse);
+  }, [activeCourse]);
+
   const playerPaceSecPerKm = useMemo(() => {
     return parsePaceInput(paceInput);
   }, [paceInput]);
@@ -543,6 +552,10 @@ export default function RaceMap() {
   );
 
   function createInitialHud(): RunnerHudState[] {
+    if (!hasActiveCourse) {
+      return [];
+    }
+
     return [
       {
         id: "player",
@@ -585,7 +598,7 @@ export default function RaceMap() {
 
   function fitMapToCourse(course: Course) {
     const map = mapRef.current;
-    if (!map || course.polyline.length === 0) return;
+    if (!map || !isRunnableCourse(course)) return;
 
     const bounds = new mapboxgl.LngLatBounds();
     course.polyline.forEach((coord) => bounds.extend(coord));
@@ -612,7 +625,7 @@ export default function RaceMap() {
 
   function updateCourseSource(course: Course) {
     const map = mapRef.current;
-    if (!map) return;
+    if (!map || !isRunnableCourse(course)) return;
 
     const data = makeCourseGeoJson(course);
 
@@ -833,10 +846,32 @@ export default function RaceMap() {
   }
 
   function resetMarkersToCourseStart(course: Course) {
+    const hasCourse = isRunnableCourse(course);
     const start = course.polyline[0];
     const finish = course.polyline[course.polyline.length - 1];
 
-    if (!start || !finish) return;
+    startMarkerRef.current?.getElement().style.setProperty(
+      "display",
+      hasCourse ? "block" : "none"
+    );
+
+    finishMarkerRef.current?.getElement().style.setProperty(
+      "display",
+      hasCourse ? "block" : "none"
+    );
+
+    playerMarkerRef.current?.getElement().style.setProperty(
+      "display",
+      hasCourse ? "flex" : "none"
+    );
+
+    if (!hasCourse || !start || !finish) {
+      Object.values(botMarkerRefs.current).forEach((marker) => {
+        marker.getElement().style.display = "none";
+      });
+
+      return;
+    }
 
     startMarkerRef.current?.setLngLat(start);
     finishMarkerRef.current?.setLngLat(finish);
@@ -844,8 +879,12 @@ export default function RaceMap() {
 
     DEFAULT_BOTS.forEach((bot) => {
       const marker = botMarkerRefs.current[bot.id];
+
       if (marker) {
         marker.setLngLat(start);
+        marker.getElement().style.display = selectedBotIds.includes(bot.id)
+          ? "flex"
+          : "none";
       }
     });
   }
@@ -1105,101 +1144,6 @@ export default function RaceMap() {
     return parsed * 1000;
   }
 
-  async function handleGenerateAutoLoopCandidates() {
-    if (isRunning) return;
-
-    setAutoLoopError(null);
-    setGpsActionError(null);
-    setCustomCourseError(null);
-    setAutoLoopAllCandidates([]);
-    setAutoLoopCandidates([]);
-    setAutoLoopCandidateCursor(0);
-    setAutoLoopPreviewCandidateId(null);
-    setAutoLoopElevationSummaries({});
-    clearAutoLoopCandidateOverlay();
-
-    setActivePanel("map");
-    setSetupView("main");
-
-    if (isSecureContextState === false) {
-      setAutoLoopError("자동 루프 코스 생성은 HTTPS 환경에서 테스트해야 합니다.");
-      return;
-    }
-
-    const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
-
-    if (!token) {
-      setAutoLoopError("Mapbox token이 없습니다.");
-      return;
-    }
-
-    const targetDistanceM = parseAutoLoopTargetDistanceM();
-
-    if (!Number.isFinite(targetDistanceM) || targetDistanceM <= 0) {
-      setAutoLoopError("목표 거리를 올바르게 입력해 주세요.");
-      return;
-    }
-
-    try {
-      setIsGeneratingAutoLoop(true);
-      setStatus("현재 위치를 가져오는 중...");
-
-      const position = await getCurrentPosition();
-      const accuracy = position.coords.accuracy;
-
-      if (accuracy > 120) {
-        setAutoLoopError(
-          `현재 위치 정확도가 낮습니다. accuracy=${accuracy.toFixed(
-            1
-          )}m. 야외에서 다시 시도하세요.`
-        );
-        setStatus("현재 위치 정확도 부족");
-        return;
-      }
-
-      const origin: LngLat = [
-        position.coords.longitude,
-        position.coords.latitude,
-      ];
-
-      playerMarkerRef.current?.setLngLat(origin);
-      mapRef.current?.flyTo({
-        center: origin,
-        zoom: 15.5,
-        duration: 600,
-      });
-
-      setStatus(
-        `현재 위치 기준 ${(targetDistanceM / 1000).toFixed(
-          1
-        )}km 자동 루프 후보를 찾는 중...`
-      );
-
-      const candidates = await generateAutoLoopCourseCandidates({
-        origin,
-        token,
-        targetDistanceM,
-        toleranceM: 500,
-      });
-
-      if (candidates.length === 0) {
-        setAutoLoopError("생성 가능한 루프 후보를 찾지 못했습니다.");
-        setStatus("자동 루프 후보 없음");
-        return;
-      }
-
-      setAutoLoopAllCandidates(candidates);
-      showAutoLoopCandidatePage(candidates, 0);
-    } catch (rawError) {
-      const message = getPositionErrorMessage(rawError);
-
-      setAutoLoopError(message);
-      setStatus("자동 루프 후보 생성 실패");
-    } finally {
-      setIsGeneratingAutoLoop(false);
-    }
-  }
-
   function handleShowMoreAutoLoopCandidates() {
     if (autoLoopAllCandidates.length === 0) return;
 
@@ -1330,7 +1274,7 @@ export default function RaceMap() {
     const map = new mapboxgl.Map({
       container: mapContainerRef.current,
       style: "mapbox://styles/mapbox/streets-v12",
-      center: [126.9205, 37.5297],
+      center: DEFAULT_CENTER,
       zoom: 13.5,
       pitch: 0,
       bearing: 0,
@@ -1345,35 +1289,37 @@ export default function RaceMap() {
       setIsMapLoaded(true);
 
       enableTerrainElevationSource(map);
-      updateCourseSource(DEFAULT_COURSE);
-
-      const start = DEFAULT_COURSE.polyline[0];
-      const finish = DEFAULT_COURSE.polyline[DEFAULT_COURSE.polyline.length - 1];
 
       startMarkerRef.current = new mapboxgl.Marker({ color: "#16a34a" })
-        .setLngLat(start)
+        .setLngLat(DEFAULT_CENTER)
         .setPopup(new mapboxgl.Popup().setText("Start"))
         .addTo(map);
 
+      startMarkerRef.current.getElement().style.display = "none";
+
       finishMarkerRef.current = new mapboxgl.Marker({ color: "#dc2626" })
-        .setLngLat(finish)
+        .setLngLat(DEFAULT_CENTER)
         .setPopup(new mapboxgl.Popup().setText("Finish"))
         .addTo(map);
+
+      finishMarkerRef.current.getElement().style.display = "none";
 
       playerMarkerRef.current = new mapboxgl.Marker({
         element: createRunnerMarkerElement("You", "🏃", "#16a34a"),
         anchor: "bottom",
       })
-        .setLngLat(start)
+        .setLngLat(DEFAULT_CENTER)
         .setPopup(new mapboxgl.Popup().setText("You"))
         .addTo(map);
+
+      playerMarkerRef.current.getElement().style.display = "none";
 
       DEFAULT_BOTS.forEach((bot) => {
         const marker = new mapboxgl.Marker({
           element: createRunnerMarkerElement(bot.name, "🤖", "#2563eb"),
           anchor: "bottom",
         })
-          .setLngLat(start)
+          .setLngLat(DEFAULT_CENTER)
           .setPopup(
             new mapboxgl.Popup().setText(
               `${bot.name} · ${formatPace(bot.paceSecPerKm)}`
@@ -1381,14 +1327,11 @@ export default function RaceMap() {
           )
           .addTo(map);
 
-        marker.getElement().style.display = selectedBotIds.includes(bot.id)
-          ? "flex"
-          : "none";
+        marker.getElement().style.display = "none";
 
         botMarkerRefs.current[bot.id] = marker;
       });
 
-      fitMapToCourse(DEFAULT_COURSE);
       setRunnerHud(createInitialHud());
     });
 
@@ -1429,9 +1372,12 @@ export default function RaceMap() {
   useEffect(() => {
     if (!isMapLoaded) return;
 
-    updateCourseSource(activeCourse);
+    if (isRunnableCourse(activeCourse)) {
+      updateCourseSource(activeCourse);
+      fitMapToCourse(activeCourse);
+    }
+
     resetMarkersToCourseStart(activeCourse);
-    fitMapToCourse(activeCourse);
 
     setRunnerHud(createInitialHud());
     setElapsedSec(0);
@@ -1495,9 +1441,8 @@ export default function RaceMap() {
 
   useEffect(() => {
     Object.entries(botMarkerRefs.current).forEach(([botId, marker]) => {
-      marker.getElement().style.display = selectedBotIds.includes(botId)
-        ? "flex"
-        : "none";
+      marker.getElement().style.display =
+        selectedBotIds.includes(botId) && hasActiveCourse ? "flex" : "none";
     });
 
     if (!isRunning) {
@@ -1506,10 +1451,10 @@ export default function RaceMap() {
 
     // 봇 선택 변경 시 HUD와 marker 표시만 동기화
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedBotIds, isRunning]);
+  }, [selectedBotIds, isRunning, hasActiveCourse]);
 
   useEffect(() => {
-    if (!isRunning || startTimeMs === null) return;
+    if (!isRunning || startTimeMs === null || !hasActiveCourse) return;
 
     const tick = () => {
       const now = Date.now();
@@ -1617,6 +1562,7 @@ export default function RaceMap() {
     selectedBots,
     gpsTracker.stop,
     activeCourse,
+    hasActiveCourse,
   ]);
 
   function handleToggleBot(botId: string) {
@@ -1764,8 +1710,110 @@ export default function RaceMap() {
     }
   }
 
+  async function handleGenerateAutoLoopCandidates() {
+    if (isRunning) return;
+
+    setAutoLoopError(null);
+    setGpsActionError(null);
+    setCustomCourseError(null);
+    setAutoLoopAllCandidates([]);
+    setAutoLoopCandidates([]);
+    setAutoLoopCandidateCursor(0);
+    setAutoLoopPreviewCandidateId(null);
+    setAutoLoopElevationSummaries({});
+    clearAutoLoopCandidateOverlay();
+
+    setActivePanel("map");
+    setSetupView("main");
+
+    if (isSecureContextState === false) {
+      setAutoLoopError("자동 루프 코스 생성은 HTTPS 환경에서 테스트해야 합니다.");
+      return;
+    }
+
+    const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+
+    if (!token) {
+      setAutoLoopError("Mapbox token이 없습니다.");
+      return;
+    }
+
+    const targetDistanceM = parseAutoLoopTargetDistanceM();
+
+    if (!Number.isFinite(targetDistanceM) || targetDistanceM <= 0) {
+      setAutoLoopError("목표 거리를 올바르게 입력해 주세요.");
+      return;
+    }
+
+    try {
+      setIsGeneratingAutoLoop(true);
+      setStatus("현재 위치를 가져오는 중...");
+
+      const position = await getCurrentPosition();
+      const accuracy = position.coords.accuracy;
+
+      if (accuracy > 120) {
+        setAutoLoopError(
+          `현재 위치 정확도가 낮습니다. accuracy=${accuracy.toFixed(
+            1
+          )}m. 야외에서 다시 시도하세요.`
+        );
+        setStatus("현재 위치 정확도 부족");
+        return;
+      }
+
+      const origin: LngLat = [
+        position.coords.longitude,
+        position.coords.latitude,
+      ];
+
+      playerMarkerRef.current?.setLngLat(origin);
+      mapRef.current?.flyTo({
+        center: origin,
+        zoom: 15.5,
+        duration: 600,
+      });
+
+      setStatus(
+        `현재 위치 기준 ${(targetDistanceM / 1000).toFixed(
+          1
+        )}km 자동 루프 후보를 찾는 중...`
+      );
+
+      const candidates = await generateAutoLoopCourseCandidates({
+        origin,
+        token,
+        targetDistanceM,
+        toleranceM: 500,
+      });
+
+      if (candidates.length === 0) {
+        setAutoLoopError("생성 가능한 루프 후보를 찾지 못했습니다.");
+        setStatus("자동 루프 후보 없음");
+        return;
+      }
+
+      setAutoLoopAllCandidates(candidates);
+      showAutoLoopCandidatePage(candidates, 0);
+    } catch (rawError) {
+      const message = getPositionErrorMessage(rawError);
+
+      setAutoLoopError(message);
+      setStatus("자동 루프 후보 생성 실패");
+    } finally {
+      setIsGeneratingAutoLoop(false);
+    }
+  }
+
   function handleStartRace() {
     if (!isMapLoaded) return;
+
+    if (!hasActiveCourse) {
+      setStatus("먼저 코스를 생성하거나 선택해야 합니다.");
+      setActivePanel("setup");
+      setSetupView("main");
+      return;
+    }
 
     if (isCustomCourseMode) {
       setStatus("커스텀 코스 생성 중에는 레이스를 시작할 수 없습니다.");
@@ -1924,10 +1972,21 @@ export default function RaceMap() {
                 </div>
 
                 <div className="rounded-lg bg-slate-50 p-2 text-xs text-slate-700">
-                  <div className="font-semibold text-slate-900">
-                    {activeCourse.name}
-                  </div>
-                  <div>길이: {(courseLengthM / 1000).toFixed(2)} km</div>
+                  {hasActiveCourse ? (
+                    <>
+                      <div className="font-semibold text-slate-900">
+                        {activeCourse.name}
+                      </div>
+                      <div>길이: {(courseLengthM / 1000).toFixed(2)} km</div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="font-semibold text-slate-900">
+                        아직 선택된 코스가 없습니다.
+                      </div>
+                      <div>자동 루프 후보 또는 커스텀 코스를 먼저 선택하세요.</div>
+                    </>
+                  )}
                 </div>
 
                 <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-2">
@@ -2138,7 +2197,12 @@ export default function RaceMap() {
                 <button
                   type="button"
                   onClick={handleStartRace}
-                  disabled={!isMapLoaded || isRunning || isGpsBlockedBySecurity}
+                  disabled={
+                    !isMapLoaded ||
+                    isRunning ||
+                    isGpsBlockedBySecurity ||
+                    !hasActiveCourse
+                  }
                   className="rounded-xl bg-blue-600 px-3 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
                   Start Race
@@ -2650,7 +2714,12 @@ export default function RaceMap() {
             <button
               type="button"
               onClick={handleStartRace}
-              disabled={!isMapLoaded || isRunning || isGpsBlockedBySecurity}
+              disabled={
+                !isMapLoaded ||
+                isRunning ||
+                isGpsBlockedBySecurity ||
+                !hasActiveCourse
+              }
               className="rounded-xl bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
             >
               Start
