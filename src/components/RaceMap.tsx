@@ -4017,7 +4017,7 @@ export default function RaceMap() {
             </div>
           ) : (
             <div className="mx-auto max-w-[560px] space-y-3">
-              <div className="overflow-hidden rounded-[28px] border border-white/50 bg-slate-950/85 p-5 text-white shadow-2xl shadow-slate-900/20 backdrop-blur">
+              <div className="hero-glass-card overflow-hidden rounded-[28px] border border-white/40 bg-slate-950/55 p-5 text-white shadow-2xl shadow-slate-900/20 backdrop-blur">
                 <div className="text-xs font-semibold uppercase tracking-[0.26em] text-emerald-200">
                   PaceRace
                 </div>
@@ -4901,50 +4901,10 @@ export default function RaceMap() {
           background-position: center 42%;
           background-repeat: no-repeat;
         }
-        
-        .setup-background::before {
-          content: "";
-          position: absolute;
-          inset: 0;
-          z-index: 1;
-          background:
-            linear-gradient(
-              135deg,
-              rgba(248, 250, 252, 0.34),
-              rgba(239, 246, 255, 0.24),
-              rgba(236, 253, 245, 0.28)
-            ),
-            radial-gradient(
-              circle at top center,
-              rgba(255, 255, 255, 0.10),
-              transparent 36%
-            ),
-            radial-gradient(
-              circle at bottom right,
-              rgba(15, 23, 42, 0.18),
-              transparent 44%
-            ),
-            linear-gradient(
-              to bottom,
-              rgba(15, 23, 42, 0.08),
-              rgba(15, 23, 42, 0.16)
-            );
-          backdrop-filter: blur(0.6px);
-          pointer-events: none;
-        }
 
+        .setup-background::before,
         .setup-background::after {
-          content: "";
-          position: absolute;
-          inset: 0;
-          background:
-            linear-gradient(
-              180deg,
-              rgba(255, 255, 255, 0.28),
-              rgba(255, 255, 255, 0.74) 72%,
-              rgba(255, 255, 255, 0.88) 100%
-            );
-          backdrop-filter: blur(1.5px);
+          content: none;
         }
 
         .race-map {
@@ -5139,6 +5099,99 @@ export default function RaceMap() {
           font-size: 20px;
           line-height: 1;
           font-weight: 800;
+        }
+
+
+
+        /* iOS Weather-style glass treatment for the setup screen */
+        .race-setup-panel > div {
+          position: relative;
+          z-index: 2;
+        }
+
+        .hero-glass-card {
+          border-color: rgba(255, 255, 255, 0.34) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(15, 23, 42, 0.62),
+              rgba(15, 23, 42, 0.36)
+            ) !important;
+          backdrop-filter: blur(24px) saturate(145%);
+          -webkit-backdrop-filter: blur(24px) saturate(145%);
+          box-shadow:
+            0 24px 60px rgba(15, 23, 42, 0.26),
+            inset 0 1px 0 rgba(255, 255, 255, 0.18),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.06);
+        }
+
+        .race-setup-panel .rounded-xl.border,
+        .race-setup-panel .rounded-lg.border {
+          border-color: rgba(255, 255, 255, 0.34) !important;
+          background: rgba(255, 255, 255, 0.18) !important;
+          backdrop-filter: blur(22px) saturate(145%);
+          -webkit-backdrop-filter: blur(22px) saturate(145%);
+          box-shadow:
+            0 18px 46px rgba(15, 23, 42, 0.18),
+            inset 0 1px 0 rgba(255, 255, 255, 0.42),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.12);
+        }
+
+        .race-setup-panel .bg-white {
+          background: rgba(255, 255, 255, 0.20) !important;
+          backdrop-filter: blur(18px) saturate(138%);
+          -webkit-backdrop-filter: blur(18px) saturate(138%);
+        }
+
+        .race-setup-panel .bg-slate-50,
+        .race-setup-panel .bg-blue-50,
+        .race-setup-panel .bg-orange-50,
+        .race-setup-panel .bg-red-50,
+        .race-setup-panel .bg-yellow-50,
+        .race-setup-panel .bg-emerald-50 {
+          background: rgba(255, 255, 255, 0.14) !important;
+          backdrop-filter: blur(16px) saturate(132%);
+          -webkit-backdrop-filter: blur(16px) saturate(132%);
+        }
+
+        .race-setup-panel input {
+          border-color: rgba(255, 255, 255, 0.42) !important;
+          background: rgba(255, 255, 255, 0.24) !important;
+          color: #0f172a;
+          backdrop-filter: blur(14px) saturate(128%);
+          -webkit-backdrop-filter: blur(14px) saturate(128%);
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.36),
+            0 8px 20px rgba(15, 23, 42, 0.06);
+        }
+
+        .race-setup-panel input::placeholder {
+          color: rgba(51, 65, 85, 0.68);
+        }
+
+        .race-root button {
+          transform: translateY(0) scale(1);
+          transition:
+            transform 140ms ease,
+            box-shadow 140ms ease,
+            filter 140ms ease,
+            background-color 140ms ease,
+            border-color 140ms ease;
+          will-change: transform;
+        }
+
+        .race-root button:hover:not(:disabled) {
+          filter: brightness(1.02);
+        }
+
+        .race-root button:active:not(:disabled) {
+          transform: translateY(1px) scale(0.975);
+          filter: brightness(0.96);
+        }
+
+        .race-root button:disabled {
+          transform: none;
+          filter: none;
         }
 
         @media (orientation: landscape) and (max-height: 560px) {
