@@ -6281,6 +6281,355 @@ export default function RaceMap() {
           }
         }
 
+
+        /* =========================================================
+           Transparent Liquid Glass refinement
+           - Keep hero as-is
+           - Non-hero cards: near-clear liquid glass
+           - Selected controls: black glass
+           - Unselected controls: transparent glass
+           - Disabled controls: same transparent glass, gray text only
+           ========================================================= */
+        .race-root-setup .race-setup-panel > div {
+          position: relative;
+          z-index: 2;
+        }
+
+        .race-root-setup .race-setup-panel .rounded-xl.border:not(.hero-glass-card),
+        .race-root-setup .race-setup-panel .rounded-lg.border:not(.hero-glass-card),
+        .race-root-setup .race-setup-panel .rounded-xl[class*="border"]:not(.hero-glass-card),
+        .race-root-setup .race-setup-panel .rounded-lg[class*="border"]:not(.hero-glass-card) {
+          position: relative;
+          overflow: hidden;
+          border-color: rgba(15, 23, 42, 0.13) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.13),
+              rgba(255, 255, 255, 0.035)
+            ) !important;
+          backdrop-filter: blur(30px) saturate(180%);
+          -webkit-backdrop-filter: blur(30px) saturate(180%);
+          box-shadow:
+            0 18px 46px rgba(15, 23, 42, 0.07),
+            inset 0 1px 0 rgba(255, 255, 255, 0.60),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.10);
+        }
+
+        .race-root-setup .race-setup-panel .rounded-xl.border:not(.hero-glass-card)::before,
+        .race-root-setup .race-setup-panel .rounded-lg.border:not(.hero-glass-card)::before,
+        .race-root-setup .race-setup-panel .rounded-xl[class*="border"]:not(.hero-glass-card)::before,
+        .race-root-setup .race-setup-panel .rounded-lg[class*="border"]:not(.hero-glass-card)::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: 0;
+          border-radius: inherit;
+          background:
+            radial-gradient(
+              circle at 18% 0%,
+              rgba(255, 255, 255, 0.34),
+              transparent 34%
+            ),
+            linear-gradient(
+              180deg,
+              rgba(255, 255, 255, 0.22),
+              transparent 48%
+            );
+          pointer-events: none;
+          filter: url("#liquid-glass-soft");
+          opacity: 0.82;
+        }
+
+        .race-root-setup .race-setup-panel .rounded-xl.border:not(.hero-glass-card) > *,
+        .race-root-setup .race-setup-panel .rounded-lg.border:not(.hero-glass-card) > *,
+        .race-root-setup .race-setup-panel .rounded-xl[class*="border"]:not(.hero-glass-card) > *,
+        .race-root-setup .race-setup-panel .rounded-lg[class*="border"]:not(.hero-glass-card) > * {
+          position: relative;
+          z-index: 1;
+        }
+
+        /* Inner informational surfaces should be almost fully transparent. */
+        .race-root-setup .race-setup-panel .bg-white,
+        .race-root-setup .race-setup-panel .bg-slate-50,
+        .race-root-setup .race-setup-panel .bg-blue-50,
+        .race-root-setup .race-setup-panel .bg-orange-50,
+        .race-root-setup .race-setup-panel .bg-red-50,
+        .race-root-setup .race-setup-panel .bg-yellow-50,
+        .race-root-setup .race-setup-panel .bg-emerald-50,
+        .race-root-setup .race-setup-panel .bg-purple-50,
+        .race-root-setup .run-settings-panel .bg-white,
+        .race-root-setup .run-settings-panel .bg-slate-50,
+        .race-root-setup .run-settings-panel .bg-blue-50,
+        .race-root-setup .run-settings-panel .bg-orange-50,
+        .race-root-setup .run-settings-panel .bg-green-50 {
+          border-color: rgba(15, 23, 42, 0.10) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.10),
+              rgba(255, 255, 255, 0.025)
+            ) !important;
+          backdrop-filter: blur(24px) saturate(170%);
+          -webkit-backdrop-filter: blur(24px) saturate(170%);
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.40),
+            0 8px 20px rgba(15, 23, 42, 0.035);
+        }
+
+        /* Inputs: clear liquid field with strong focus ring. */
+        .race-root-setup .race-setup-panel input,
+        .race-root-setup .run-settings-panel input {
+          border-color: rgba(15, 23, 42, 0.14) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.14),
+              rgba(255, 255, 255, 0.035)
+            ) !important;
+          color: #0f172a !important;
+          backdrop-filter: blur(24px) saturate(170%);
+          -webkit-backdrop-filter: blur(24px) saturate(170%);
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.48),
+            0 8px 22px rgba(15, 23, 42, 0.05);
+        }
+
+        .race-root-setup .race-setup-panel input:focus,
+        .race-root-setup .run-settings-panel input:focus {
+          border-color: rgba(15, 23, 42, 0.32) !important;
+          box-shadow:
+            0 0 0 3px rgba(15, 23, 42, 0.08),
+            inset 0 1px 0 rgba(255, 255, 255, 0.56),
+            0 10px 24px rgba(15, 23, 42, 0.08);
+        }
+
+        .race-root-setup .race-setup-panel input::placeholder,
+        .race-root-setup .run-settings-panel input::placeholder {
+          color: rgba(71, 85, 105, 0.55);
+        }
+
+        /* Default unselected buttons: transparent liquid glass. */
+        .race-root-setup .race-setup-panel button:not(.race-tab-button):not(.hero-glass-card),
+        .race-root-setup .run-settings-panel button,
+        .race-root-setup .course-action-button,
+        .race-root-setup .course-action-primary {
+          position: relative;
+          overflow: hidden;
+          border: 1px solid rgba(15, 23, 42, 0.14) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.13),
+              rgba(255, 255, 255, 0.025)
+            ) !important;
+          color: #0f172a !important;
+          backdrop-filter: blur(26px) saturate(180%);
+          -webkit-backdrop-filter: blur(26px) saturate(180%);
+          box-shadow:
+            0 10px 26px rgba(15, 23, 42, 0.055),
+            inset 0 1px 0 rgba(255, 255, 255, 0.52),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.12) !important;
+          transition:
+            transform 140ms ease,
+            filter 140ms ease,
+            border-color 140ms ease,
+            box-shadow 140ms ease,
+            background 140ms ease;
+        }
+
+        .race-root-setup .race-setup-panel button:not(.race-tab-button):not(.hero-glass-card)::before,
+        .race-root-setup .run-settings-panel button::before,
+        .race-root-setup .course-action-button::before,
+        .race-root-setup .course-action-primary::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: 0;
+          border-radius: inherit;
+          background:
+            radial-gradient(
+              circle at 22% 0%,
+              rgba(255, 255, 255, 0.42),
+              transparent 36%
+            ),
+            linear-gradient(
+              180deg,
+              rgba(255, 255, 255, 0.26),
+              transparent 48%
+            );
+          pointer-events: none;
+          filter: url("#liquid-glass-soft");
+          opacity: 0.86;
+        }
+
+        .race-root-setup .race-setup-panel button:not(.race-tab-button):not(.hero-glass-card) > *,
+        .race-root-setup .run-settings-panel button > *,
+        .race-root-setup .course-action-button > *,
+        .race-root-setup .course-action-primary > * {
+          position: relative;
+          z-index: 1;
+        }
+
+        .race-root-setup .race-setup-panel button:not(:disabled):hover,
+        .race-root-setup .run-settings-panel button:not(:disabled):hover,
+        .race-root-setup .course-action-button:not(:disabled):hover,
+        .race-root-setup .course-action-primary:not(:disabled):hover {
+          border-color: rgba(15, 23, 42, 0.24) !important;
+          filter: brightness(1.015);
+          box-shadow:
+            0 14px 34px rgba(15, 23, 42, 0.085),
+            inset 0 1px 0 rgba(255, 255, 255, 0.60) !important;
+        }
+
+        /* Selected controls: black liquid glass. */
+        .race-root-setup .race-tab-active,
+        .race-root-setup .race-setup-panel button.bg-slate-900,
+        .race-root-setup .race-setup-panel button.bg-slate-950,
+        .race-root-setup .race-setup-panel button.bg-slate-800,
+        .race-root-setup .race-setup-panel button.bg-blue-600,
+        .race-root-setup .race-setup-panel button.bg-green-600,
+        .race-root-setup .race-setup-panel button.bg-orange-600,
+        .race-root-setup .run-settings-panel button.bg-slate-900,
+        .race-root-setup .run-settings-panel button.bg-slate-950,
+        .race-root-setup .run-settings-panel button.bg-slate-800,
+        .race-root-setup .run-settings-panel button.bg-blue-600,
+        .race-root-setup .run-settings-panel button.bg-green-600,
+        .race-root-setup .run-settings-panel button.bg-orange-600 {
+          border-color: rgba(255, 255, 255, 0.22) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(15, 23, 42, 0.82),
+              rgba(15, 23, 42, 0.52)
+            ) !important;
+          color: rgba(255, 255, 255, 0.96) !important;
+          backdrop-filter: blur(28px) saturate(180%);
+          -webkit-backdrop-filter: blur(28px) saturate(180%);
+          box-shadow:
+            0 16px 36px rgba(15, 23, 42, 0.20),
+            inset 0 1px 0 rgba(255, 255, 255, 0.20),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.08) !important;
+        }
+
+        .race-root-setup .race-tab-active::before,
+        .race-root-setup .race-setup-panel button.bg-slate-900::before,
+        .race-root-setup .race-setup-panel button.bg-slate-950::before,
+        .race-root-setup .race-setup-panel button.bg-slate-800::before,
+        .race-root-setup .race-setup-panel button.bg-blue-600::before,
+        .race-root-setup .race-setup-panel button.bg-green-600::before,
+        .race-root-setup .race-setup-panel button.bg-orange-600::before,
+        .race-root-setup .run-settings-panel button.bg-slate-900::before,
+        .race-root-setup .run-settings-panel button.bg-slate-950::before,
+        .race-root-setup .run-settings-panel button.bg-slate-800::before,
+        .race-root-setup .run-settings-panel button.bg-blue-600::before,
+        .race-root-setup .run-settings-panel button.bg-green-600::before,
+        .race-root-setup .run-settings-panel button.bg-orange-600::before {
+          background:
+            radial-gradient(
+              circle at 24% 0%,
+              rgba(255, 255, 255, 0.28),
+              transparent 40%
+            ),
+            linear-gradient(
+              180deg,
+              rgba(255, 255, 255, 0.18),
+              transparent 48%
+            );
+          opacity: 0.92;
+        }
+
+        .race-root-setup .race-tab-active,
+        .race-root-setup .race-tab-active * ,
+        .race-root-setup .race-setup-panel button.bg-slate-900,
+        .race-root-setup .race-setup-panel button.bg-slate-900 *,
+        .race-root-setup .race-setup-panel button.bg-slate-950,
+        .race-root-setup .race-setup-panel button.bg-slate-950 *,
+        .race-root-setup .race-setup-panel button.bg-slate-800,
+        .race-root-setup .race-setup-panel button.bg-slate-800 *,
+        .race-root-setup .race-setup-panel button.bg-blue-600,
+        .race-root-setup .race-setup-panel button.bg-blue-600 *,
+        .race-root-setup .race-setup-panel button.bg-green-600,
+        .race-root-setup .race-setup-panel button.bg-green-600 *,
+        .race-root-setup .race-setup-panel button.bg-orange-600,
+        .race-root-setup .race-setup-panel button.bg-orange-600 *,
+        .race-root-setup .run-settings-panel button.bg-slate-900,
+        .race-root-setup .run-settings-panel button.bg-slate-900 *,
+        .race-root-setup .run-settings-panel button.bg-slate-950,
+        .race-root-setup .run-settings-panel button.bg-slate-950 *,
+        .race-root-setup .run-settings-panel button.bg-slate-800,
+        .race-root-setup .run-settings-panel button.bg-slate-800 *,
+        .race-root-setup .run-settings-panel button.bg-blue-600,
+        .race-root-setup .run-settings-panel button.bg-blue-600 *,
+        .race-root-setup .run-settings-panel button.bg-green-600,
+        .race-root-setup .run-settings-panel button.bg-green-600 *,
+        .race-root-setup .run-settings-panel button.bg-orange-600,
+        .race-root-setup .run-settings-panel button.bg-orange-600 * {
+          color: rgba(255, 255, 255, 0.96) !important;
+        }
+
+        /* Disabled controls: keep glass surface, gray text only. */
+        .race-root-setup .race-setup-panel button:disabled,
+        .race-root-setup .run-settings-panel button:disabled,
+        .race-root-setup .course-action-button:disabled,
+        .race-root-setup .course-action-primary:disabled {
+          opacity: 1 !important;
+          cursor: not-allowed;
+          border-color: rgba(15, 23, 42, 0.08) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.10),
+              rgba(255, 255, 255, 0.025)
+            ) !important;
+          color: rgba(100, 116, 139, 0.58) !important;
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.32),
+            0 8px 18px rgba(15, 23, 42, 0.025) !important;
+          filter: none !important;
+        }
+
+        .race-root-setup .race-setup-panel button:disabled *,
+        .race-root-setup .run-settings-panel button:disabled *,
+        .race-root-setup .course-action-button:disabled *,
+        .race-root-setup .course-action-primary:disabled * {
+          color: rgba(100, 116, 139, 0.58) !important;
+        }
+
+        .race-root-setup .race-setup-panel button:active:not(:disabled),
+        .race-root-setup .run-settings-panel button:active:not(:disabled),
+        .race-root-setup .course-action-button:active:not(:disabled),
+        .race-root-setup .course-action-primary:active:not(:disabled) {
+          transform: translateY(1px) scale(0.972);
+          filter: brightness(0.94);
+          box-shadow:
+            0 7px 18px rgba(15, 23, 42, 0.14),
+            inset 0 3px 10px rgba(15, 23, 42, 0.15),
+            inset 0 1px 0 rgba(255, 255, 255, 0.16) !important;
+        }
+
+        /* Make small secondary color labels obey transparent liquid palette. */
+        .race-root-setup .race-setup-panel .text-blue-700,
+        .race-root-setup .race-setup-panel .text-orange-700,
+        .race-root-setup .race-setup-panel .text-green-700,
+        .race-root-setup .race-setup-panel .text-red-700,
+        .race-root-setup .race-setup-panel .text-purple-700,
+        .race-root-setup .race-setup-panel .text-yellow-800 {
+          color: rgba(30, 41, 59, 0.84) !important;
+        }
+
+        /* Keep target validation bubble tactile and readable. */
+        .race-root-setup .target-distance-popover {
+          border-color: rgba(15, 23, 42, 0.18) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(15, 23, 42, 0.80),
+              rgba(15, 23, 42, 0.54)
+            ) !important;
+          color: rgba(255, 255, 255, 0.96) !important;
+        }
+
       `}</style>
 
     </div>
