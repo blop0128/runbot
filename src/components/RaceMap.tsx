@@ -6630,6 +6630,388 @@ export default function RaceMap() {
           color: rgba(255, 255, 255, 0.96) !important;
         }
 
+
+
+        /* =========================================================
+           FINAL: iOS-like bright liquid glass system override
+           Goal: translucent optical glass, white interface, black selected glass
+           ========================================================= */
+        .race-root-setup .race-map {
+          opacity: 0 !important;
+          visibility: hidden !important;
+          pointer-events: none !important;
+        }
+
+        .race-root-map .race-map {
+          opacity: 1 !important;
+          visibility: visible !important;
+          pointer-events: auto !important;
+        }
+
+        .race-root-setup .setup-background {
+          position: absolute;
+          inset: 0;
+          z-index: 20;
+          overflow: hidden;
+          background:
+            radial-gradient(circle at 24% 13%, rgba(255, 255, 255, 0.96), transparent 25%),
+            radial-gradient(circle at 76% 8%, rgba(226, 241, 255, 0.72), transparent 26%),
+            radial-gradient(circle at 14% 85%, rgba(230, 255, 245, 0.62), transparent 31%),
+            radial-gradient(circle at 78% 82%, rgba(246, 248, 255, 0.90), transparent 32%),
+            linear-gradient(135deg, #f7f8fa 0%, #edf2f7 42%, #fbfcff 100%) !important;
+          background-image: none !important;
+        }
+
+        .race-root-setup .setup-background::before {
+          content: "";
+          position: absolute;
+          inset: -12%;
+          z-index: 0;
+          pointer-events: none;
+          background:
+            linear-gradient(90deg, transparent 0 18%, rgba(15, 23, 42, 0.075) 18.2% 18.35%, transparent 18.7% 100%),
+            linear-gradient(0deg, transparent 0 71%, rgba(15, 23, 42, 0.052) 71.1% 71.25%, transparent 71.6% 100%),
+            radial-gradient(ellipse at 28% 22%, rgba(255,255,255,0.78), transparent 24%),
+            radial-gradient(ellipse at 72% 14%, rgba(255,255,255,0.52), transparent 19%),
+            radial-gradient(ellipse at 70% 62%, rgba(255,255,255,0.62), transparent 22%);
+          filter: url("#liquid-background-warp") blur(0.35px);
+          opacity: 0.95;
+        }
+
+        .race-root-setup .setup-background::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: 0;
+          pointer-events: none;
+          background:
+            radial-gradient(circle at 48% 18%, rgba(255, 255, 255, 0.62), transparent 30%),
+            linear-gradient(180deg, rgba(255, 255, 255, 0.52), rgba(255, 255, 255, 0.06) 42%, rgba(255, 255, 255, 0.42));
+        }
+
+        .race-root-setup .race-setup-panel > div {
+          position: relative;
+          z-index: 2;
+        }
+
+        /* Typography tuned for bright glass */
+        .race-root-setup .race-setup-panel,
+        .race-root-setup .race-setup-panel * {
+          text-shadow: none;
+        }
+
+        .race-root-setup .race-setup-panel .text-slate-950,
+        .race-root-setup .race-setup-panel .text-slate-900,
+        .race-root-setup .race-setup-panel .text-slate-800,
+        .race-root-setup .race-setup-panel .text-slate-700 {
+          color: rgba(15, 23, 42, 0.92) !important;
+        }
+
+        .race-root-setup .race-setup-panel .text-slate-600,
+        .race-root-setup .race-setup-panel .text-slate-500,
+        .race-root-setup .race-setup-panel .text-slate-400 {
+          color: rgba(51, 65, 85, 0.68) !important;
+        }
+
+        /* Optical slab: used by every setup card including hero. */
+        .race-root-setup .hero-glass-card,
+        .race-root-setup .race-setup-panel .rounded-xl.border,
+        .race-root-setup .race-setup-panel .rounded-lg.border,
+        .race-root-setup .race-setup-panel .rounded-xl[class*="border"],
+        .race-root-setup .race-setup-panel .rounded-lg[class*="border"],
+        .race-root-setup .run-settings-panel {
+          position: relative;
+          overflow: hidden;
+          isolation: isolate;
+          border: 1px solid rgba(255, 255, 255, 0.74) !important;
+          background:
+            linear-gradient(135deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.075)) !important;
+          backdrop-filter: blur(34px) saturate(190%) brightness(1.05);
+          -webkit-backdrop-filter: blur(34px) saturate(190%) brightness(1.05);
+          box-shadow:
+            0 24px 70px rgba(15, 23, 42, 0.095),
+            0 4px 16px rgba(15, 23, 42, 0.045),
+            inset 0 1.4px 0 rgba(255, 255, 255, 0.95),
+            inset 1px 0 0 rgba(255, 255, 255, 0.42),
+            inset -1px 0 0 rgba(255, 255, 255, 0.22),
+            inset 0 -1.2px 0 rgba(15, 23, 42, 0.075) !important;
+        }
+
+        .race-root-setup .hero-glass-card {
+          background:
+            linear-gradient(135deg, rgba(255, 255, 255, 0.52), rgba(255, 255, 255, 0.16)) !important;
+          border-color: rgba(255, 255, 255, 0.88) !important;
+          color: rgba(15, 23, 42, 0.92) !important;
+          box-shadow:
+            0 28px 78px rgba(15, 23, 42, 0.10),
+            0 8px 24px rgba(15, 23, 42, 0.055),
+            inset 0 1.5px 0 rgba(255, 255, 255, 0.98),
+            inset 0 -1.2px 0 rgba(15, 23, 42, 0.065) !important;
+        }
+
+        .race-root-setup .hero-glass-card .text-white,
+        .race-root-setup .hero-glass-card .text-slate-50,
+        .race-root-setup .hero-glass-card .text-slate-100 {
+          color: rgba(15, 23, 42, 0.93) !important;
+        }
+
+        .race-root-setup .hero-glass-card [class*="tracking-"] {
+          color: rgba(71, 85, 105, 0.82) !important;
+        }
+
+        .race-root-setup .hero-glass-card h1,
+        .race-root-setup .hero-glass-card .text-3xl,
+        .race-root-setup .hero-glass-card .text-4xl,
+        .race-root-setup .hero-glass-card .font-black {
+          color: #12a36f !important;
+        }
+
+        .race-root-setup .hero-glass-card::before,
+        .race-root-setup .race-setup-panel .rounded-xl.border::before,
+        .race-root-setup .race-setup-panel .rounded-lg.border::before,
+        .race-root-setup .race-setup-panel .rounded-xl[class*="border"]::before,
+        .race-root-setup .race-setup-panel .rounded-lg[class*="border"]::before,
+        .race-root-setup .run-settings-panel::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: -1;
+          border-radius: inherit;
+          pointer-events: none;
+          background:
+            radial-gradient(circle at 18% 0%, rgba(255, 255, 255, 0.72), transparent 34%),
+            linear-gradient(180deg, rgba(255, 255, 255, 0.48), rgba(255, 255, 255, 0.06) 44%, transparent 100%);
+          opacity: 0.92;
+          filter: url("#liquid-glass-soft");
+        }
+
+        .race-root-setup .hero-glass-card::after,
+        .race-root-setup .race-setup-panel .rounded-xl.border::after,
+        .race-root-setup .race-setup-panel .rounded-lg.border::after,
+        .race-root-setup .race-setup-panel .rounded-xl[class*="border"]::after,
+        .race-root-setup .race-setup-panel .rounded-lg[class*="border"]::after,
+        .race-root-setup .run-settings-panel::after {
+          content: "";
+          position: absolute;
+          inset: 1px;
+          z-index: -1;
+          border-radius: inherit;
+          pointer-events: none;
+          background:
+            linear-gradient(135deg, rgba(255,255,255,0.32), transparent 35%, rgba(255,255,255,0.08) 68%, transparent 100%);
+          opacity: 0.78;
+        }
+
+        .race-root-setup .hero-glass-card > *,
+        .race-root-setup .race-setup-panel .rounded-xl.border > *,
+        .race-root-setup .race-setup-panel .rounded-lg.border > *,
+        .race-root-setup .race-setup-panel .rounded-xl[class*="border"] > *,
+        .race-root-setup .race-setup-panel .rounded-lg[class*="border"] > *,
+        .race-root-setup .run-settings-panel > * {
+          position: relative;
+          z-index: 1;
+        }
+
+        /* Inner surfaces: thinner, almost lens-like glass rather than filled panels. */
+        .race-root-setup .race-setup-panel .bg-white,
+        .race-root-setup .race-setup-panel .bg-slate-50,
+        .race-root-setup .race-setup-panel .bg-blue-50,
+        .race-root-setup .race-setup-panel .bg-orange-50,
+        .race-root-setup .race-setup-panel .bg-red-50,
+        .race-root-setup .race-setup-panel .bg-yellow-50,
+        .race-root-setup .race-setup-panel .bg-emerald-50 {
+          border: 1px solid rgba(255, 255, 255, 0.58) !important;
+          background:
+            linear-gradient(135deg, rgba(255, 255, 255, 0.20), rgba(255, 255, 255, 0.035)) !important;
+          backdrop-filter: blur(26px) saturate(180%) brightness(1.04);
+          -webkit-backdrop-filter: blur(26px) saturate(180%) brightness(1.04);
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.78),
+            inset 0 -1px 0 rgba(15, 23, 42, 0.050),
+            0 8px 20px rgba(15, 23, 42, 0.035) !important;
+        }
+
+        /* Inputs */
+        .race-root-setup .race-setup-panel input,
+        .race-root-setup .run-settings-panel input {
+          border: 1px solid rgba(255, 255, 255, 0.68) !important;
+          background:
+            linear-gradient(135deg, rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0.055)) !important;
+          color: rgba(15, 23, 42, 0.94) !important;
+          backdrop-filter: blur(28px) saturate(185%) brightness(1.05);
+          -webkit-backdrop-filter: blur(28px) saturate(185%) brightness(1.05);
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.84),
+            inset 0 -1px 0 rgba(15, 23, 42, 0.055),
+            0 10px 24px rgba(15, 23, 42, 0.035) !important;
+        }
+
+        .race-root-setup .race-setup-panel input:focus,
+        .race-root-setup .run-settings-panel input:focus {
+          border-color: rgba(37, 99, 235, 0.38) !important;
+          box-shadow:
+            0 0 0 4px rgba(59, 130, 246, 0.12),
+            inset 0 1px 0 rgba(255, 255, 255, 0.88),
+            0 12px 28px rgba(15, 23, 42, 0.055) !important;
+        }
+
+        .race-root-setup .race-setup-panel input::placeholder,
+        .race-root-setup .run-settings-panel input::placeholder {
+          color: rgba(100, 116, 139, 0.62) !important;
+        }
+
+        /* Buttons: iOS-like transparent lens by default. */
+        .race-root-setup .race-tab-button,
+        .race-root-setup .race-setup-panel button:not(.hero-glass-card),
+        .race-root-setup .run-settings-panel button,
+        .race-root-setup .course-action-button,
+        .race-root-setup .course-action-primary {
+          position: relative;
+          overflow: hidden;
+          isolation: isolate;
+          border: 1px solid rgba(255, 255, 255, 0.68) !important;
+          background:
+            linear-gradient(135deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.040)) !important;
+          color: rgba(15, 23, 42, 0.94) !important;
+          backdrop-filter: blur(30px) saturate(190%) brightness(1.05);
+          -webkit-backdrop-filter: blur(30px) saturate(190%) brightness(1.05);
+          box-shadow:
+            0 14px 34px rgba(15, 23, 42, 0.065),
+            inset 0 1.25px 0 rgba(255, 255, 255, 0.90),
+            inset 0 -1px 0 rgba(15, 23, 42, 0.055) !important;
+          transition:
+            transform 140ms ease,
+            filter 140ms ease,
+            box-shadow 140ms ease,
+            border-color 140ms ease,
+            background 140ms ease;
+        }
+
+        .race-root-setup .race-tab-button::before,
+        .race-root-setup .race-setup-panel button:not(.hero-glass-card)::before,
+        .race-root-setup .run-settings-panel button::before,
+        .race-root-setup .course-action-button::before,
+        .race-root-setup .course-action-primary::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: -1;
+          border-radius: inherit;
+          pointer-events: none;
+          background:
+            radial-gradient(circle at 24% 0%, rgba(255, 255, 255, 0.66), transparent 35%),
+            linear-gradient(180deg, rgba(255, 255, 255, 0.42), transparent 46%);
+          filter: url("#liquid-glass-soft");
+          opacity: 0.88;
+        }
+
+        .race-root-setup .race-tab-button > *,
+        .race-root-setup .race-setup-panel button:not(.hero-glass-card) > *,
+        .race-root-setup .run-settings-panel button > *,
+        .race-root-setup .course-action-button > *,
+        .race-root-setup .course-action-primary > * {
+          position: relative;
+          z-index: 1;
+        }
+
+        /* Selected state: black liquid glass, like the active pill in the reference. */
+        .race-root-setup .race-tab-active,
+        .race-root-setup .race-setup-panel button.bg-slate-900,
+        .race-root-setup .race-setup-panel button.bg-slate-950,
+        .race-root-setup .race-setup-panel button.bg-slate-800,
+        .race-root-setup .race-setup-panel button.bg-blue-600,
+        .race-root-setup .race-setup-panel button.bg-green-600,
+        .race-root-setup .race-setup-panel button.bg-orange-600,
+        .race-root-setup .run-settings-panel button.bg-slate-900,
+        .race-root-setup .run-settings-panel button.bg-slate-950,
+        .race-root-setup .run-settings-panel button.bg-slate-800,
+        .race-root-setup .run-settings-panel button.bg-blue-600,
+        .race-root-setup .run-settings-panel button.bg-green-600,
+        .race-root-setup .run-settings-panel button.bg-orange-600 {
+          border-color: rgba(255, 255, 255, 0.48) !important;
+          background:
+            linear-gradient(135deg, rgba(19, 24, 34, 0.76), rgba(12, 16, 24, 0.46)) !important;
+          color: rgba(255, 255, 255, 0.97) !important;
+          backdrop-filter: blur(32px) saturate(190%) brightness(1.03);
+          -webkit-backdrop-filter: blur(32px) saturate(190%) brightness(1.03);
+          box-shadow:
+            0 18px 38px rgba(15, 23, 42, 0.19),
+            inset 0 1px 0 rgba(255, 255, 255, 0.24),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.08) !important;
+        }
+
+        .race-root-setup .race-tab-active *,
+        .race-root-setup .race-setup-panel button.bg-slate-900 *,
+        .race-root-setup .race-setup-panel button.bg-slate-950 *,
+        .race-root-setup .race-setup-panel button.bg-slate-800 *,
+        .race-root-setup .race-setup-panel button.bg-blue-600 *,
+        .race-root-setup .race-setup-panel button.bg-green-600 *,
+        .race-root-setup .race-setup-panel button.bg-orange-600 *,
+        .race-root-setup .run-settings-panel button.bg-slate-900 *,
+        .race-root-setup .run-settings-panel button.bg-slate-950 *,
+        .race-root-setup .run-settings-panel button.bg-slate-800 *,
+        .race-root-setup .run-settings-panel button.bg-blue-600 *,
+        .race-root-setup .run-settings-panel button.bg-green-600 *,
+        .race-root-setup .run-settings-panel button.bg-orange-600 * {
+          color: rgba(255, 255, 255, 0.97) !important;
+        }
+
+        /* Disabled: lens remains, text fades only. */
+        .race-root-setup button:disabled,
+        .race-root-setup .course-action-button:disabled,
+        .race-root-setup .course-action-primary:disabled {
+          opacity: 1 !important;
+          cursor: not-allowed;
+          border-color: rgba(255, 255, 255, 0.52) !important;
+          background:
+            linear-gradient(135deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.028)) !important;
+          color: rgba(100, 116, 139, 0.52) !important;
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.58),
+            inset 0 -1px 0 rgba(15, 23, 42, 0.035),
+            0 8px 20px rgba(15, 23, 42, 0.025) !important;
+          filter: none !important;
+        }
+
+        .race-root-setup button:disabled * {
+          color: rgba(100, 116, 139, 0.52) !important;
+        }
+
+        .race-root-setup button:not(:disabled):hover,
+        .race-root-setup .course-action-button:not(:disabled):hover,
+        .race-root-setup .course-action-primary:not(:disabled):hover {
+          border-color: rgba(255, 255, 255, 0.86) !important;
+          filter: brightness(1.012);
+          box-shadow:
+            0 18px 42px rgba(15, 23, 42, 0.085),
+            inset 0 1.25px 0 rgba(255, 255, 255, 0.96),
+            inset 0 -1px 0 rgba(15, 23, 42, 0.055) !important;
+        }
+
+        .race-root-setup button:active:not(:disabled),
+        .race-root-setup .course-action-button:active:not(:disabled),
+        .race-root-setup .course-action-primary:active:not(:disabled) {
+          transform: translateY(1px) scale(0.972);
+          filter: brightness(0.965);
+          box-shadow:
+            0 7px 18px rgba(15, 23, 42, 0.10),
+            inset 0 4px 14px rgba(15, 23, 42, 0.14),
+            inset 0 1px 0 rgba(255, 255, 255, 0.24) !important;
+        }
+
+        /* Popover stays readable. */
+        .race-root-setup .target-distance-popover {
+          border-color: rgba(255, 255, 255, 0.54) !important;
+          background:
+            linear-gradient(135deg, rgba(19, 24, 34, 0.82), rgba(12, 16, 24, 0.54)) !important;
+          color: rgba(255, 255, 255, 0.97) !important;
+          backdrop-filter: blur(30px) saturate(180%);
+          -webkit-backdrop-filter: blur(30px) saturate(180%);
+          box-shadow:
+            0 18px 42px rgba(15, 23, 42, 0.18),
+            inset 0 1px 0 rgba(255,255,255,0.20) !important;
+        }
+
       `}</style>
 
     </div>
