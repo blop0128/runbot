@@ -4827,30 +4827,41 @@ export default function RaceMap() {
       )}
 
       {activePanel === "map" && isAutoLoopPanelVisible && (
-        <div
-          className={`race-panel race-auto-loop-panel ${
-            isAutoLoopPanelCollapsed ? "race-auto-loop-panel-collapsed" : ""
+        <section
+          className={`race-panel race-candidate-bottom-sheet ${
+            isAutoLoopPanelCollapsed ? "race-candidate-bottom-sheet-collapsed" : ""
           }`}
+          aria-label={`${candidateModeLabel} 후보 목록`}
         >
-          <div className="mb-2 flex items-start justify-between gap-3">
-            <div>
-              <div className="text-sm font-bold text-slate-900">
-                {candidateModeLabel} 후보
-              </div>
-              <div className="text-xs text-slate-500">{status}</div>
-              {isAutoLoopPanelCollapsed && previewingAutoLoopCandidate && (
-                <div className="mt-1 text-[11px] font-semibold text-blue-700">
-                  미리보기: {previewingAutoLoopCandidate.name} ·{" "}
-                  {(previewingAutoLoopCandidate.distanceM / 1000).toFixed(2)}km
+          <div className="candidate-bottom-sheet-handle" aria-hidden="true" />
+
+          <div className="candidate-bottom-sheet-header">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <div className="truncate text-sm font-black text-slate-900">
+                  {candidateModeLabel} 후보
                 </div>
-              )}
+                {previewingAutoLoopCandidate && (
+                  <span className="shrink-0 rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-black text-white">
+                    미리보기
+                  </span>
+                )}
+              </div>
+
+              <div className="candidate-bottom-sheet-status">
+                {isAutoLoopPanelCollapsed && previewingAutoLoopCandidate
+                  ? `${previewingAutoLoopCandidate.name} · ${(
+                      previewingAutoLoopCandidate.distanceM / 1000
+                    ).toFixed(2)}km`
+                  : status}
+              </div>
             </div>
 
-            <div className="flex shrink-0 gap-1">
+            <div className="candidate-bottom-sheet-actions">
               <button
                 type="button"
                 onClick={() => setIsAutoLoopPanelCollapsed((value) => !value)}
-                className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700"
+                className="candidate-sheet-control-button"
               >
                 {isAutoLoopPanelCollapsed ? "열기" : "접기"}
               </button>
@@ -4858,7 +4869,7 @@ export default function RaceMap() {
               <button
                 type="button"
                 onClick={handleCloseAutoLoopPanel}
-                className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700"
+                className="candidate-sheet-control-button"
               >
                 닫기
               </button>
@@ -4866,22 +4877,22 @@ export default function RaceMap() {
           </div>
 
           {!isAutoLoopPanelCollapsed && (
-            <>
+            <div className="candidate-bottom-sheet-body">
               {isGeneratingAnyCourse && (
-                <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
+                <div className="candidate-sheet-info-card text-sm text-slate-700">
                   현재 위치와 주변 보행 경로를 기준으로 {candidateModeLabel} 후보를 탐색 중입니다.
                 </div>
               )}
 
               {autoLoopError && (
-                <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                <div className="candidate-sheet-error-card text-sm text-red-700">
                   {autoLoopError}
                 </div>
               )}
 
               {autoLoopCandidates.length > 0 && (
                 <div className="space-y-2">
-                  <div className="rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
+                  <div className="candidate-sheet-info-card text-xs text-slate-600">
                     표시 중: {autoLoopCandidateCursor - autoLoopCandidates.length + 1}
                     ~{autoLoopCandidateCursor} / {autoLoopAllCandidates.length}개 ·
                     남은 후보 {autoLoopRemainingCount}개
@@ -4895,24 +4906,24 @@ export default function RaceMap() {
                     return (
                       <div
                         key={candidate.candidateId}
-                        className={`rounded-lg border p-2 ${
+                        className={`candidate-course-card ${
                           isPreviewing
-                            ? "border-blue-300 bg-blue-50"
+                            ? "candidate-course-card-previewing"
                             : candidate.isWithinTolerance
-                              ? "border-emerald-200 bg-white"
-                              : "border-yellow-200 bg-yellow-50"
+                              ? "candidate-course-card-ok"
+                              : "candidate-course-card-warning"
                         }`}
                       >
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                        <div className="candidate-course-card-content">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2 text-sm font-black text-slate-900">
                               <span
-                                className="inline-block h-3 w-3 rounded-full"
+                                className="inline-block h-3 w-3 shrink-0 rounded-full"
                                 style={{
                                   backgroundColor: getAutoLoopCandidateColor(index),
                                 }}
                               />
-                              {candidate.name}
+                              <span className="truncate">{candidate.name}</span>
                               {isPreviewing && (
                                 <span className="rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-bold text-white">
                                   미리보기 중
@@ -4920,13 +4931,13 @@ export default function RaceMap() {
                               )}
                             </div>
 
-                            <div className="mt-1 text-xs text-slate-600">
+                            <div className="mt-1 text-xs font-semibold text-slate-600">
                               거리 {(candidate.distanceM / 1000).toFixed(2)}km · 오차{" "}
                               {(candidate.distanceErrorM / 1000).toFixed(2)}km
                             </div>
 
                             {candidateMode === "outAndBack" && (
-                              <div className="text-[11px] text-orange-700">
+                              <div className="text-[11px] font-semibold text-orange-700">
                                 편도 끝 반환점: {formatPoint(candidate.endpoint)}
                               </div>
                             )}
@@ -4937,19 +4948,19 @@ export default function RaceMap() {
                                 : "허용 오차 밖"}
                             </div>
 
-                            <div className="mt-1 text-[11px] font-medium text-slate-700">
+                            <div className="mt-1 text-[11px] font-semibold text-slate-700">
                               {formatElevationSummary(summary)}
                             </div>
                           </div>
 
-                          <div className="flex shrink-0 flex-col gap-1">
+                          <div className="candidate-course-card-actions">
                             <button
                               type="button"
                               onClick={() => handlePreviewAutoLoopCandidate(candidate, index)}
-                              className={`rounded-lg px-3 py-2 text-xs font-semibold ${
+                              className={`candidate-card-action-button ${
                                 isPreviewing
-                                  ? "bg-blue-100 text-blue-700"
-                                  : "bg-slate-100 text-slate-700"
+                                  ? "candidate-card-action-button-active"
+                                  : ""
                               }`}
                             >
                               지도에서 보기
@@ -4958,7 +4969,7 @@ export default function RaceMap() {
                             <button
                               type="button"
                               onClick={() => handleApplyAutoLoopCandidate(candidate)}
-                              className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white"
+                              className="candidate-card-action-button candidate-card-action-button-primary"
                             >
                               이 코스로 달리기
                             </button>
@@ -4973,7 +4984,7 @@ export default function RaceMap() {
                       type="button"
                       onClick={handleShowMoreAutoLoopCandidates}
                       disabled={autoLoopRemainingCount <= 0}
-                      className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                      className="candidate-sheet-footer-button candidate-sheet-footer-button-primary disabled:cursor-not-allowed"
                     >
                       후보 다시 찾기
                     </button>
@@ -4984,16 +4995,16 @@ export default function RaceMap() {
                         setActivePanel("setup");
                         setSetupView("main");
                       }}
-                      className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700"
+                      className="candidate-sheet-footer-button"
                     >
                       설정으로
                     </button>
                   </div>
                 </div>
               )}
-            </>
+            </div>
           )}
-        </div>
+        </section>
       )}
 
       {activePanel === "map" && isCustomCourseMode && (
@@ -7955,6 +7966,364 @@ export default function RaceMap() {
             -webkit-line-clamp: 2;
             -webkit-box-orient: vertical;
             overflow: hidden;
+          }
+        }
+
+
+        /* =========================================================
+           Dedicated candidate bottom sheet
+           - Route search results are no longer a floating top panel.
+           - Expanded and collapsed states are both anchored to bottom.
+           - Header controls always remain reachable.
+           ========================================================= */
+        .race-candidate-bottom-sheet {
+          position: absolute !important;
+          z-index: 86 !important;
+          top: auto !important;
+          left: max(10px, env(safe-area-inset-left)) !important;
+          right: max(10px, env(safe-area-inset-right)) !important;
+          bottom: max(10px, env(safe-area-inset-bottom)) !important;
+          display: flex;
+          min-height: 0;
+          max-height: min(72dvh, 640px);
+          flex-direction: column;
+          overflow: hidden;
+          border: 1px solid rgba(255, 255, 255, 0.74) !important;
+          border-radius: 28px 28px 24px 24px;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.68),
+              rgba(255, 255, 255, 0.28)
+            ) !important;
+          color: #0f172a !important;
+          backdrop-filter: blur(30px) saturate(185%) !important;
+          -webkit-backdrop-filter: blur(30px) saturate(185%) !important;
+          box-shadow:
+            0 -18px 52px rgba(15, 23, 42, 0.16),
+            0 8px 28px rgba(15, 23, 42, 0.10),
+            inset 0 1px 0 rgba(255, 255, 255, 0.94),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.30) !important;
+          padding: 10px;
+          transform: none !important;
+        }
+
+        .race-candidate-bottom-sheet::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: 0;
+          background:
+            radial-gradient(circle at 20% 0%, rgba(255, 255, 255, 0.78), transparent 36%),
+            linear-gradient(180deg, rgba(255, 255, 255, 0.42), transparent 44%),
+            radial-gradient(circle at 90% 100%, rgba(191, 219, 254, 0.14), transparent 34%);
+          pointer-events: none;
+        }
+
+        .race-candidate-bottom-sheet > * {
+          position: relative;
+          z-index: 1;
+        }
+
+        .candidate-bottom-sheet-handle {
+          align-self: center;
+          width: 42px;
+          height: 5px;
+          border-radius: 9999px;
+          background: rgba(15, 23, 42, 0.18);
+          box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+          margin: 0 0 8px 0;
+        }
+
+        .candidate-bottom-sheet-header {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 10px;
+          flex: 0 0 auto;
+          min-height: 0;
+          border: 1px solid rgba(255, 255, 255, 0.62);
+          border-radius: 20px;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.62),
+              rgba(255, 255, 255, 0.22)
+            );
+          padding: 10px;
+          box-shadow:
+            0 12px 28px rgba(15, 23, 42, 0.08),
+            inset 0 1px 0 rgba(255, 255, 255, 0.86);
+          backdrop-filter: blur(22px) saturate(170%);
+          -webkit-backdrop-filter: blur(22px) saturate(170%);
+        }
+
+        .candidate-bottom-sheet-status {
+          display: -webkit-box;
+          margin-top: 2px;
+          overflow: hidden;
+          color: rgba(51, 65, 85, 0.84);
+          font-size: 12px;
+          font-weight: 700;
+          line-height: 1.35;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+        }
+
+        .candidate-bottom-sheet-actions {
+          display: flex;
+          flex: 0 0 auto;
+          gap: 6px;
+        }
+
+        .candidate-sheet-control-button,
+        .candidate-card-action-button,
+        .candidate-sheet-footer-button {
+          position: relative;
+          overflow: hidden;
+          border: 1px solid rgba(255, 255, 255, 0.66) !important;
+          border-radius: 16px;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.62),
+              rgba(255, 255, 255, 0.20)
+            ) !important;
+          color: #0f172a !important;
+          font-size: 12px;
+          font-weight: 900;
+          line-height: 1;
+          padding: 10px 12px;
+          text-shadow: none !important;
+          backdrop-filter: blur(20px) saturate(170%) !important;
+          -webkit-backdrop-filter: blur(20px) saturate(170%) !important;
+          box-shadow:
+            0 10px 24px rgba(15, 23, 42, 0.09),
+            inset 0 1px 0 rgba(255, 255, 255, 0.86),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.22) !important;
+          transition:
+            transform 140ms ease,
+            filter 140ms ease,
+            box-shadow 140ms ease,
+            border-color 140ms ease;
+        }
+
+        .candidate-sheet-control-button:active:not(:disabled),
+        .candidate-card-action-button:active:not(:disabled),
+        .candidate-sheet-footer-button:active:not(:disabled) {
+          transform: translateY(1px) scale(0.972);
+          filter: brightness(0.94);
+        }
+
+        .candidate-bottom-sheet-body {
+          flex: 1 1 auto;
+          min-height: 0;
+          overflow-y: auto;
+          overscroll-behavior: contain;
+          -webkit-overflow-scrolling: touch;
+          padding-top: 10px;
+          padding-right: 2px;
+        }
+
+        .candidate-sheet-info-card,
+        .candidate-sheet-error-card {
+          border: 1px solid rgba(255, 255, 255, 0.58);
+          border-radius: 16px;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.54),
+              rgba(255, 255, 255, 0.18)
+            );
+          padding: 10px;
+          box-shadow:
+            0 10px 26px rgba(15, 23, 42, 0.07),
+            inset 0 1px 0 rgba(255, 255, 255, 0.78);
+          backdrop-filter: blur(20px) saturate(165%);
+          -webkit-backdrop-filter: blur(20px) saturate(165%);
+        }
+
+        .candidate-sheet-error-card {
+          background:
+            linear-gradient(
+              135deg,
+              rgba(254, 242, 242, 0.72),
+              rgba(255, 255, 255, 0.24)
+            );
+        }
+
+        .candidate-course-card {
+          border: 1px solid rgba(255, 255, 255, 0.62);
+          border-radius: 18px;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.62),
+              rgba(255, 255, 255, 0.22)
+            );
+          padding: 10px;
+          box-shadow:
+            0 12px 30px rgba(15, 23, 42, 0.09),
+            inset 0 1px 0 rgba(255, 255, 255, 0.82);
+          backdrop-filter: blur(22px) saturate(175%);
+          -webkit-backdrop-filter: blur(22px) saturate(175%);
+        }
+
+        .candidate-course-card-previewing {
+          border-color: rgba(59, 130, 246, 0.36);
+          box-shadow:
+            0 14px 34px rgba(59, 130, 246, 0.13),
+            inset 0 1px 0 rgba(255, 255, 255, 0.82);
+        }
+
+        .candidate-course-card-warning {
+          border-color: rgba(234, 179, 8, 0.34);
+        }
+
+        .candidate-course-card-ok {
+          border-color: rgba(16, 185, 129, 0.30);
+        }
+
+        .candidate-course-card-content {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 10px;
+        }
+
+        .candidate-course-card-actions {
+          display: flex;
+          flex: 0 0 148px;
+          flex-direction: column;
+          gap: 6px;
+        }
+
+        .candidate-card-action-button {
+          min-height: 40px;
+          width: 100%;
+        }
+
+        .candidate-card-action-button-active,
+        .candidate-card-action-button-primary,
+        .candidate-sheet-footer-button-primary {
+          border-color: rgba(255, 255, 255, 0.52) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(15, 23, 42, 0.88),
+              rgba(30, 41, 59, 0.62)
+            ) !important;
+          color: rgba(255, 255, 255, 0.98) !important;
+          text-shadow: 0 1px 2px rgba(0, 0, 0, 0.28) !important;
+          box-shadow:
+            0 14px 30px rgba(15, 23, 42, 0.16),
+            inset 0 1px 0 rgba(255, 255, 255, 0.24),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.08) !important;
+        }
+
+        .candidate-sheet-footer-button:disabled {
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.16),
+              rgba(255, 255, 255, 0.05)
+            ) !important;
+          color: rgba(100, 116, 139, 0.58) !important;
+          text-shadow: none !important;
+        }
+
+        .race-candidate-bottom-sheet-collapsed {
+          bottom: max(10px, env(safe-area-inset-bottom)) !important;
+          max-height: none !important;
+          height: auto !important;
+          min-height: 0 !important;
+        }
+
+        .race-candidate-bottom-sheet-collapsed .candidate-bottom-sheet-handle {
+          margin-bottom: 7px;
+        }
+
+        .race-candidate-bottom-sheet-collapsed .candidate-bottom-sheet-header {
+          min-height: 76px;
+          align-items: center;
+        }
+
+        @media (min-width: 768px) {
+          .race-candidate-bottom-sheet {
+            left: 50% !important;
+            right: auto !important;
+            width: min(620px, calc(100vw - 32px));
+            max-height: min(76dvh, 720px);
+            transform: translateX(-50%) !important;
+          }
+
+          .race-candidate-bottom-sheet-collapsed {
+            width: min(520px, calc(100vw - 32px));
+          }
+        }
+
+        @media (max-width: 767px) {
+          .race-root-map.race-root-auto-loop-open .race-candidate-bottom-sheet {
+            top: auto !important;
+            bottom: max(10px, env(safe-area-inset-bottom)) !important;
+            left: max(8px, env(safe-area-inset-left)) !important;
+            right: max(8px, env(safe-area-inset-right)) !important;
+            max-height: min(72dvh, calc(100dvh - 118px));
+            border-radius: 26px 26px 22px 22px;
+            padding: 9px;
+          }
+
+          .race-root-map.race-root-auto-loop-open.race-root-auto-loop-collapsed .race-candidate-bottom-sheet,
+          .race-root-map .race-candidate-bottom-sheet-collapsed {
+            top: auto !important;
+            bottom: max(10px, env(safe-area-inset-bottom)) !important;
+            max-height: none !important;
+            transform: none !important;
+          }
+
+          .candidate-bottom-sheet-header {
+            gap: 8px;
+            padding: 9px;
+          }
+
+          .candidate-bottom-sheet-actions {
+            gap: 5px;
+          }
+
+          .candidate-sheet-control-button {
+            min-height: 40px;
+            padding: 9px 11px;
+          }
+
+          .candidate-course-card-content {
+            flex-direction: column;
+          }
+
+          .candidate-course-card-actions {
+            width: 100%;
+            flex: 1 1 auto;
+            flex-direction: row;
+          }
+
+          .candidate-course-card-actions > button {
+            flex: 1 1 0;
+          }
+        }
+
+        @media (max-width: 420px) {
+          .candidate-bottom-sheet-header {
+            align-items: stretch;
+            flex-direction: column;
+          }
+
+          .candidate-bottom-sheet-actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            width: 100%;
+          }
+
+          .race-candidate-bottom-sheet-collapsed .candidate-bottom-sheet-header {
+            min-height: 0;
           }
         }
 
