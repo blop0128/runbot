@@ -633,6 +633,268 @@ function minDistanceToPolylineSamplesM(point: LngLat, samples: LngLat[]): number
   }, Number.POSITIVE_INFINITY);
 }
 
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function getNearestSampleIndexAndDistance(
+  point: LngLat,
+  samples: LngLat[]
+): { index: number; distanceM: number } {
+  let bestIndex = -1;
+  let bestDistanceM = Number.POSITIVE_INFINITY;
+
+  samples.forEach((sample, index) => {
+    const distanceM = haversineDistanceM(point, sample);
+
+    if (distanceM < bestDistanceM) {
+      bestDistanceM = distanceM;
+      bestIndex = index;
+    }
+  });
+
+  return { index: bestIndex, distanceM: bestDistanceM };
+}
+
+function bearingBetweenPointsDeg(a: LngLat, b: LngLat): number {
+  const phi1 = toRadians(a[1]);
+  const phi2 = toRadians(b[1]);
+  const lambda1 = toRadians(a[0]);
+  const lambda2 = toRadians(b[0]);
+  const deltaLambda = lambda2 - lambda1;
+
+  const y = Math.sin(deltaLambda) * Math.cos(phi2);
+  const x =
+    Math.cos(phi1) * Math.sin(phi2) -
+    Math.sin(phi1) * Math.cos(phi2) * Math.cos(deltaLambda);
+
+  return (toDegrees(Math.atan2(y, x)) + 360) % 360;
+}
+
+function angleDeltaDeg(a: number, b: number): number {
+  return Math.abs((((b - a + 540) % 360) + 360) % 360 - 180);
+}
+
+function calculateSharpTurnPenaltyM(routePolyline: LngLat[]): number {
+  const routeLengthM = getPolylineLengthM(routePolyline);
+  const routeSamples = samplePolylineEvenly(
+    routePolyline,
+    clampNumber(Math.ceil(routeLengthM / 35) + 1, 8, 120)
+  );
+
+  if (routeSamples.length < 4) return 0;
+
+  const bearings: number[] = [];
+
+  for (let index = 1; index < routeSamples.length; index += 1) {
+    const previous = routeSamples[index - 1];
+    const current = routeSamples[index];
+
+    if (haversineDistanceM(previous, current) < 10) continue;
+    bearings.push(bearingBetweenPointsDeg(previous, current));
+  }
+
+  let penaltyM = 0;
+
+  for (let index = 1; index < bearings.length; index += 1) {
+    const delta = angleDeltaDeg(bearings[index - 1], bearings[index]);
+
+    if (delta >= 155) {
+      penaltyM += 380;
+    } else if (delta >= 125) {
+      penaltyM += 210;
+    } else if (delta >= 95) {
+      penaltyM += 95;
+    } else if (delta >= 70) {
+      penaltyM += 28;
+    }
+  }
+
+  return penaltyM;
+}
+
+function toLocalMeters(point: LngLat, origin: LngLat): { x: number; y: number } {
+  const phi0 = toRadians(origin[1]);
+
+  return {
+    x: toRadians(point[0] - origin[0]) * EARTH_RADIUS_M * Math.cos(phi0),
+    y: toRadians(point[1] - origin[1]) * EARTH_RADIUS_M,
+  };
+}
+
+function calculateRepeatedPathPenaltyM(routePolyline: LngLat[]): number {
+  const routeLengthM = getPolylineLengthM(routePolyline);
+  const routeSamples = samplePolylineEvenly(
+    routePolyline,
+    clampNumber(Math.ceil(routeLengthM / 24) + 1, 8, 180)
+  );
+
+  if (routeSamples.length < 8) return 0;
+
+  const origin = routeSamples[0];
+  const cellSizeM = 38;
+  const visited = new Map<string, number>();
+  let repeatedCellCount = 0;
+  let longReturnCount = 0;
+
+  routeSamples.forEach((point, index) => {
+    const local = toLocalMeters(point, origin);
+    const key = `${Math.round(local.x / cellSizeM)},${Math.round(local.y / cellSizeM)}`;
+    const previousIndex = visited.get(key);
+
+    if (previousIndex !== undefined && index - previousIndex > 5) {
+      repeatedCellCount += 1;
+
+      if (index - previousIndex > 14) {
+        longReturnCount += 1;
+      }
+    } else if (previousIndex === undefined) {
+      visited.set(key, index);
+    }
+  });
+
+  return repeatedCellCount * 55 + longReturnCount * 120;
+}
+
+function calculateDrawProgressPenaltyM({
+  routePolyline,
+  drawnPoints,
+  isCircular,
+}: {
+  routePolyline: LngLat[];
+  drawnPoints: LngLat[];
+  isCircular: boolean;
+}): number {
+  const drawnSamples = samplePolylineEvenly(drawnPoints, isCircular ? 72 : 56);
+  const routeSamples = samplePolylineEvenly(routePolyline, isCircular ? 84 : 64);
+
+  if (drawnSamples.length < 4 || routeSamples.length < 4) return 0;
+
+  const nearestIndexes = routeSamples.map((point) =>
+    getNearestSampleIndexAndDistance(point, drawnSamples).index
+  );
+
+  let penaltyM = 0;
+  let previous = nearestIndexes[0];
+  let wrapOffset = 0;
+  const wrapThreshold = Math.max(6, Math.round(drawnSamples.length * 0.36));
+
+  for (let index = 1; index < nearestIndexes.length; index += 1) {
+    let current = nearestIndexes[index] + wrapOffset;
+
+    if (isCircular && previous - current > wrapThreshold) {
+      wrapOffset += drawnSamples.length;
+      current += drawnSamples.length;
+    }
+
+    const regression = previous - current;
+
+    if (regression > 2) {
+      penaltyM += regression * (isCircular ? 28 : 38);
+    }
+
+    const jump = current - previous;
+    if (jump > drawnSamples.length * 0.22) {
+      penaltyM += jump * 10;
+    }
+
+    previous = current;
+  }
+
+  return penaltyM;
+}
+
+function calculateDrawCorridorMetrics({
+  routePolyline,
+  drawnPoints,
+  isCircular,
+}: {
+  routePolyline: LngLat[];
+  drawnPoints: LngLat[];
+  isCircular: boolean;
+}): {
+  averageDistanceM: number;
+  maxDistanceM: number;
+  averageOutsideM: number;
+  maxOutsideM: number;
+  outsideRatio: number;
+  corridorWidthM: number;
+} {
+  const drawnDistanceM = getPolylineLengthM(drawnPoints);
+  const radiusStats = getDrawnRouteRadiusStats(drawnPoints);
+  const drawnSamples = samplePolylineEvenly(drawnPoints, isCircular ? 72 : 56);
+  const routeSamples = samplePolylineEvenly(routePolyline, isCircular ? 96 : 72);
+
+  if (drawnSamples.length === 0 || routeSamples.length === 0) {
+    return {
+      averageDistanceM: Number.POSITIVE_INFINITY,
+      maxDistanceM: Number.POSITIVE_INFINITY,
+      averageOutsideM: Number.POSITIVE_INFINITY,
+      maxOutsideM: Number.POSITIVE_INFINITY,
+      outsideRatio: 1,
+      corridorWidthM: 0,
+    };
+  }
+
+  const corridorWidthM = isCircular
+    ? clampNumber(radiusStats.averageRadiusM * 0.42, 85, 260)
+    : clampNumber(drawnDistanceM * 0.13, 70, 240);
+  const distances = routeSamples.map((point) =>
+    minDistanceToPolylineSamplesM(point, drawnSamples)
+  );
+  const outsideDistances = distances.map((distanceM) =>
+    Math.max(0, distanceM - corridorWidthM)
+  );
+  const averageDistanceM =
+    distances.reduce((acc, value) => acc + value, 0) / distances.length;
+  const averageOutsideM =
+    outsideDistances.reduce((acc, value) => acc + value, 0) /
+    outsideDistances.length;
+  const outsideRatio =
+    outsideDistances.filter((value) => value > 0).length / outsideDistances.length;
+
+  return {
+    averageDistanceM,
+    maxDistanceM: Math.max(...distances),
+    averageOutsideM,
+    maxOutsideM: Math.max(...outsideDistances),
+    outsideRatio,
+    corridorWidthM,
+  };
+}
+
+function calculateLoopClosurePenaltyM({
+  routePolyline,
+  drawnPoints,
+  isCircular,
+}: {
+  routePolyline: LngLat[];
+  drawnPoints: LngLat[];
+  isCircular: boolean;
+}): number {
+  const routeStart = routePolyline[0];
+  const routeFinish = routePolyline[routePolyline.length - 1];
+  const drawnStart = drawnPoints[0];
+  const drawnFinish = drawnPoints[drawnPoints.length - 1];
+
+  if (!routeStart || !routeFinish || !drawnStart || !drawnFinish) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  if (isCircular) {
+    const routeClosureM = haversineDistanceM(routeStart, routeFinish);
+    const startAnchorM = haversineDistanceM(routeStart, drawnStart);
+    const finishAnchorM = haversineDistanceM(routeFinish, drawnStart);
+
+    return routeClosureM * 1.9 + startAnchorM * 0.65 + finishAnchorM * 0.80;
+  }
+
+  return (
+    haversineDistanceM(routeStart, drawnStart) * 0.35 +
+    haversineDistanceM(routeFinish, drawnFinish) * 0.55
+  );
+}
+
 function calculateDrawRouteShapeScore({
   routePolyline,
   drawnPoints,
@@ -644,26 +906,37 @@ function calculateDrawRouteShapeScore({
   distanceErrorM: number;
   isCircular: boolean;
 }): number {
-  const drawnSamples = samplePolylineEvenly(drawnPoints, 48);
-  const routeSamples = samplePolylineEvenly(routePolyline, 48);
+  const corridor = calculateDrawCorridorMetrics({
+    routePolyline,
+    drawnPoints,
+    isCircular,
+  });
+  const repeatedPathPenaltyM = calculateRepeatedPathPenaltyM(routePolyline);
+  const sharpTurnPenaltyM = calculateSharpTurnPenaltyM(routePolyline);
+  const progressPenaltyM = calculateDrawProgressPenaltyM({
+    routePolyline,
+    drawnPoints,
+    isCircular,
+  });
+  const closurePenaltyM = calculateLoopClosurePenaltyM({
+    routePolyline,
+    drawnPoints,
+    isCircular,
+  });
+  const drawnDistanceM = Math.max(getPolylineLengthM(drawnPoints), 1);
 
-  if (drawnSamples.length === 0 || routeSamples.length === 0) {
-    return Number.POSITIVE_INFINITY;
-  }
-
-  const distances = routeSamples.map((point) =>
-    minDistanceToPolylineSamplesM(point, drawnSamples)
+  return (
+    distanceErrorM * 0.55 +
+    corridor.averageDistanceM * 1.80 +
+    corridor.maxDistanceM * 0.42 +
+    corridor.averageOutsideM * 5.60 +
+    corridor.maxOutsideM * 1.35 +
+    corridor.outsideRatio * drawnDistanceM * 0.95 +
+    repeatedPathPenaltyM +
+    sharpTurnPenaltyM +
+    progressPenaltyM +
+    closurePenaltyM
   );
-  const averageDistanceM =
-    distances.reduce((acc, value) => acc + value, 0) / distances.length;
-  const maxDistanceM = Math.max(...distances);
-  const start = drawnPoints[0];
-  const finish = drawnPoints[drawnPoints.length - 1];
-  const loopClosurePenaltyM = isCircular
-    ? haversineDistanceM(routePolyline[routePolyline.length - 1], routePolyline[0]) * 1.2
-    : haversineDistanceM(routePolyline[routePolyline.length - 1], finish) * 0.4;
-
-  return distanceErrorM * 0.85 + averageDistanceM * 3.2 + maxDistanceM * 0.95 + loopClosurePenaltyM;
 }
 
 function makeDrawAttemptKey(points: LngLat[]): string {
@@ -793,8 +1066,8 @@ async function generateDrawnRouteCandidates({
             distanceM: route.distanceM,
             distanceErrorM,
             isWithinTolerance: isCircular
-              ? score <= Math.max(520, drawnDistanceM * 0.42)
-              : distanceErrorM <= Math.max(350, drawnDistanceM * 0.25),
+              ? score <= Math.max(900, drawnDistanceM * 0.72)
+              : score <= Math.max(650, drawnDistanceM * 0.48),
             bearingDeg: 0,
             endpoint: isCircular ? start : finish,
             straightDistanceM: haversineDistanceM(start, finish),
