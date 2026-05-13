@@ -4931,7 +4931,7 @@ export default function RaceMap() {
           inset: 0;
           z-index: 20;
           overflow: hidden;
-          background-image: url("/backgrounds/runner-bg-v2.jpg");
+          background-image: url("/backgrounds/runner-bg.jpg");
           background-size: cover;
           background-position: center 42%;
           background-repeat: no-repeat;
@@ -5463,7 +5463,7 @@ export default function RaceMap() {
 
           .race-runner-list {
             max-height: min(330px, calc(100dvh - 365px));
-  
+          }
 
           .run-settings-backdrop {
             align-items: center;
@@ -5500,6 +5500,217 @@ export default function RaceMap() {
             left: 8px;
             right: 8px;
           }
+
+
+        /* Stronger iOS-style glassmorphism for setup screen cards */
+        .race-setup-panel > div {
+          position: relative;
+          z-index: 2;
+        }
+
+        .hero-glass-card {
+          position: relative;
+          overflow: hidden;
+          border-color: rgba(255, 255, 255, 0.34) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(15, 23, 42, 0.58),
+              rgba(68, 52, 40, 0.34)
+            ) !important;
+          backdrop-filter: blur(28px) saturate(160%);
+          -webkit-backdrop-filter: blur(28px) saturate(160%);
+          box-shadow:
+            0 24px 60px rgba(15, 23, 42, 0.24),
+            inset 0 1px 0 rgba(255, 255, 255, 0.22),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.08);
+        }
+
+        .hero-glass-card::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: 0;
+          background:
+            linear-gradient(
+              180deg,
+              rgba(255, 255, 255, 0.16),
+              transparent 46%
+            );
+          pointer-events: none;
+        }
+
+        .hero-glass-card > * {
+          position: relative;
+          z-index: 1;
+        }
+
+        /* Main white cards: course card, running prep card, my courses cards */
+        .race-setup-panel .rounded-xl.border,
+        .race-setup-panel .rounded-lg.border {
+          position: relative;
+          overflow: hidden;
+          border-color: rgba(255, 255, 255, 0.42) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.24),
+              rgba(255, 255, 255, 0.10)
+            ) !important;
+          backdrop-filter: blur(26px) saturate(155%);
+          -webkit-backdrop-filter: blur(26px) saturate(155%);
+          box-shadow:
+            0 18px 45px rgba(15, 23, 42, 0.20),
+            inset 0 1px 0 rgba(255, 255, 255, 0.44),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.10);
+        }
+
+        /* Soft highlight layer inside cards */
+        .race-setup-panel .rounded-xl.border::before,
+        .race-setup-panel .rounded-lg.border::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: 0;
+          background:
+            linear-gradient(
+              180deg,
+              rgba(255, 255, 255, 0.18),
+              transparent 42%
+            );
+          pointer-events: none;
+        }
+
+        /* Keep card contents above glass highlight */
+        .race-setup-panel .rounded-xl.border > *,
+        .race-setup-panel .rounded-lg.border > * {
+          position: relative;
+          z-index: 1;
+        }
+
+        /* Inner info boxes inside cards */
+        .race-setup-panel .bg-slate-50,
+        .race-setup-panel .bg-blue-50,
+        .race-setup-panel .bg-orange-50,
+        .race-setup-panel .bg-red-50,
+        .race-setup-panel .bg-yellow-50,
+        .race-setup-panel .bg-emerald-50 {
+          border: 1px solid rgba(255, 255, 255, 0.32) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.20),
+              rgba(255, 255, 255, 0.08)
+            ) !important;
+          backdrop-filter: blur(20px) saturate(145%);
+          -webkit-backdrop-filter: blur(20px) saturate(145%);
+        }
+
+        /* Inputs */
+        .race-setup-panel input {
+          border-color: rgba(255, 255, 255, 0.44) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.30),
+              rgba(255, 255, 255, 0.14)
+            ) !important;
+          color: #0f172a;
+          backdrop-filter: blur(18px) saturate(135%);
+          -webkit-backdrop-filter: blur(18px) saturate(135%);
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.34),
+            0 8px 22px rgba(15, 23, 42, 0.08);
+        }
+
+        .race-setup-panel input::placeholder {
+          color: rgba(51, 65, 85, 0.72);
+        }
+
+        /* Quick distance buttons, secondary buttons */
+        .race-setup-panel button.bg-white,
+        .race-setup-panel button.bg-slate-100 {
+          border: 1px solid rgba(255, 255, 255, 0.42) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.30),
+              rgba(255, 255, 255, 0.13)
+            ) !important;
+          color: #0f172a !important;
+          backdrop-filter: blur(20px) saturate(145%);
+          -webkit-backdrop-filter: blur(20px) saturate(145%);
+          box-shadow:
+            0 10px 24px rgba(15, 23, 42, 0.14),
+            inset 0 1px 0 rgba(255, 255, 255, 0.42);
+        }
+
+        /* Selected dark buttons such as active 3K */
+        .race-setup-panel button[class*="bg-slate-900"],
+        .race-setup-panel button[class*="bg-slate-950"],
+        .race-setup-panel button[class*="bg-slate-800"] {
+          border: 1px solid rgba(255, 255, 255, 0.24) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(15, 23, 42, 0.78),
+              rgba(68, 52, 40, 0.48)
+            ) !important;
+          color: rgba(255, 255, 255, 0.96) !important;
+          backdrop-filter: blur(22px) saturate(150%);
+          -webkit-backdrop-filter: blur(22px) saturate(150%);
+          box-shadow:
+            0 12px 30px rgba(15, 23, 42, 0.24),
+            inset 0 1px 0 rgba(255, 255, 255, 0.18);
+        }
+
+        /* Main course CTA buttons */
+        .course-action-button,
+        .course-action-primary {
+          border: 1px solid rgba(255, 255, 255, 0.26) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(17, 24, 39, 0.78),
+              rgba(68, 52, 40, 0.54)
+            ) !important;
+          color: rgba(255, 255, 255, 0.97) !important;
+          backdrop-filter: blur(24px) saturate(150%);
+          -webkit-backdrop-filter: blur(24px) saturate(150%);
+          box-shadow:
+            0 14px 34px rgba(15, 23, 42, 0.24),
+            inset 0 1px 0 rgba(255, 255, 255, 0.22),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.08);
+        }
+
+        /* Disabled buttons should still look glassy, not flat gray */
+        .race-setup-panel button:disabled {
+          border-color: rgba(255, 255, 255, 0.28) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(226, 232, 240, 0.32),
+              rgba(226, 232, 240, 0.14)
+            ) !important;
+          color: rgba(71, 85, 105, 0.62) !important;
+          backdrop-filter: blur(18px) saturate(120%);
+          -webkit-backdrop-filter: blur(18px) saturate(120%);
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.24),
+            0 8px 20px rgba(15, 23, 42, 0.08);
+        }
+
+        /* More tactile press effect */
+        .race-setup-panel button:active:not(:disabled),
+        .course-action-button:active:not(:disabled),
+        .course-action-primary:active:not(:disabled) {
+          transform: translateY(1px) scale(0.972);
+          filter: brightness(0.93);
+          box-shadow:
+            0 7px 18px rgba(15, 23, 42, 0.24),
+            inset 0 3px 10px rgba(15, 23, 42, 0.24),
+            inset 0 1px 0 rgba(255, 255, 255, 0.10);
+        }
         }
       `}</style>
     </div>
