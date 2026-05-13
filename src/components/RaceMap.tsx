@@ -103,6 +103,80 @@ function isRunnableCourse(course: Course): boolean {
   return course.polyline.length >= 2 && getPolylineLengthM(course.polyline) > 1;
 }
 
+function toRadians(degrees: number): number {
+  return (degrees * Math.PI) / 180;
+}
+
+function toDegrees(radians: number): number {
+  return (radians * 180) / Math.PI;
+}
+
+function getBearingDegrees(from: LngLat, to: LngLat): number {
+  const [fromLng, fromLat] = from;
+  const [toLng, toLat] = to;
+
+  const lat1 = toRadians(fromLat);
+  const lat2 = toRadians(toLat);
+  const deltaLng = toRadians(toLng - fromLng);
+
+  const y = Math.sin(deltaLng) * Math.cos(lat2);
+  const x =
+    Math.cos(lat1) * Math.sin(lat2) -
+    Math.sin(lat1) * Math.cos(lat2) * Math.cos(deltaLng);
+
+  return (toDegrees(Math.atan2(y, x)) + 360) % 360;
+}
+
+function makeEmptyPointFeatureCollection(): GeoJSON.FeatureCollection<GeoJSON.Point> {
+  return {
+    type: "FeatureCollection",
+    features: [],
+  };
+}
+
+function makeCourseArrowGeoJson(
+  polyline: LngLat[],
+  intervalM = 100
+): GeoJSON.FeatureCollection<GeoJSON.Point> {
+  const totalDistanceM = getPolylineLengthM(polyline);
+
+  if (polyline.length < 2 || totalDistanceM <= 10) {
+    return makeEmptyPointFeatureCollection();
+  }
+
+  const features: GeoJSON.Feature<GeoJSON.Point>[] = [];
+  const startDistanceM = Math.min(intervalM * 0.6, totalDistanceM * 0.2);
+  const endDistanceM = Math.max(totalDistanceM - 12, 0);
+
+  for (
+    let distanceM = startDistanceM;
+    distanceM < endDistanceM;
+    distanceM += intervalM
+  ) {
+    const point = getLngLatAtDistance(polyline, distanceM);
+    const nextPoint = getLngLatAtDistance(
+      polyline,
+      Math.min(distanceM + 8, totalDistanceM)
+    );
+
+    features.push({
+      type: "Feature",
+      properties: {
+        bearing: getBearingDegrees(point, nextPoint),
+      },
+      geometry: {
+        type: "Point",
+        coordinates: point,
+      },
+    });
+  }
+
+  return {
+    type: "FeatureCollection",
+    features,
+  };
+}
+
 function parsePaceInput(input: string): number {
   const trimmed = input.trim();
 
@@ -457,6 +531,7 @@ export default function RaceMap() {
   const [activePanel, setActivePanel] = useState<ActivePanel>("setup");
   const [setupView, setSetupView] = useState<SetupView>("main");
   const [isLeaderboardOpen, setIsLeaderboardOpen] = useState(true);
+  const [isAutoLoopPanelCollapsed, setIsAutoLoopPanelCollapsed] = useState(false);
 
   const [activeCourse, setActiveCourse] = useState<Course>(DEFAULT_COURSE);
   const [savedCourses, setSavedCourses] = useState<SavedCourseRecord[]>([]);
@@ -464,6 +539,7 @@ export default function RaceMap() {
 
   const [status, setStatus] = useState("지도 초기화 중...");
   const [error, setError] = useState<string | null>(null);
+  const [gpsActionError, setGpsActionError] = useState<string | null>(null);
 
   const [isMapLoaded, setIsMapLoaded] = useState(false);
   const [isGeneratingCustomCourse, setIsGeneratingCustomCourse] =
@@ -534,6 +610,14 @@ export default function RaceMap() {
   const sortedSavedCourses = useMemo(() => {
     return getSortedSavedCourses(savedCourses);
   }, [savedCourses]);
+
+  const previewingAutoLoopCandidate = useMemo(() => {
+    return (
+      autoLoopCandidates.find(
+        (candidate) => candidate.candidateId === autoLoopPreviewCandidateId
+      ) ?? null
+    );
+  }, [autoLoopCandidates, autoLoopPreviewCandidateId]);
 
   const canBuildCustomCourse =
     Boolean(customPoints.start) &&
@@ -622,6 +706,51 @@ export default function RaceMap() {
     });
   }
 
+  function updateCourseArrowSource(course: Course) {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const data = isRunnableCourse(course)
+      ? makeCourseArrowGeoJson(course.polyline, 95)
+      : makeEmptyPointFeatureCollection();
+
+    const source = map.getSource("race-course-arrows") as
+      | mapboxgl.GeoJSONSource
+      | undefined;
+
+    if (source) {
+      source.setData(data);
+    } else {
+      map.addSource("race-course-arrows", {
+        type: "geojson",
+        data,
+      });
+    }
+
+    if (!map.getLayer("race-course-arrows-symbol")) {
+      map.addLayer({
+        id: "race-course-arrows-symbol",
+        type: "symbol",
+        source: "race-course-arrows",
+        layout: {
+          "symbol-placement": "point",
+          "text-field": "▲",
+          "text-size": 15,
+          "text-rotate": ["get", "bearing"] as never,
+          "text-rotation-alignment": "map",
+          "text-pitch-alignment": "map",
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: {
+          "text-color": "#1d4ed8",
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 1.5,
+        },
+      });
+    }
+  }
+
   function updateCourseSource(course: Course) {
     const map = mapRef.current;
     if (!map || !isRunnableCourse(course)) return;
@@ -634,27 +763,78 @@ export default function RaceMap() {
 
     if (source) {
       source.setData(data as GeoJSON.Feature<GeoJSON.LineString>);
-      return;
+    } else {
+      map.addSource("race-course", {
+        type: "geojson",
+        data,
+      });
+
+      map.addLayer({
+        id: "race-course-line",
+        type: "line",
+        source: "race-course",
+        layout: {
+          "line-join": "round",
+          "line-cap": "round",
+        },
+        paint: {
+          "line-width": 5,
+          "line-color": "#2563eb",
+        },
+      });
     }
 
-    map.addSource("race-course", {
-      type: "geojson",
-      data,
-    });
+    updateCourseArrowSource(course);
+  }
 
-    map.addLayer({
-      id: "race-course-line",
-      type: "line",
-      source: "race-course",
-      layout: {
-        "line-join": "round",
-        "line-cap": "round",
-      },
-      paint: {
-        "line-width": 5,
-        "line-color": "#2563eb",
-      },
-    });
+  function updateAutoLoopCandidateArrowOverlay(
+    candidate: AutoLoopCourseCandidate | null,
+    color: string
+  ) {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const data = candidate
+      ? makeCourseArrowGeoJson(candidate.polyline, 85)
+      : makeEmptyPointFeatureCollection();
+
+    const source = map.getSource("auto-loop-candidate-arrows") as
+      | mapboxgl.GeoJSONSource
+      | undefined;
+
+    if (source) {
+      source.setData(data);
+    } else {
+      map.addSource("auto-loop-candidate-arrows", {
+        type: "geojson",
+        data,
+      });
+    }
+
+    if (!map.getLayer("auto-loop-candidate-arrows-symbol")) {
+      map.addLayer({
+        id: "auto-loop-candidate-arrows-symbol",
+        type: "symbol",
+        source: "auto-loop-candidate-arrows",
+        layout: {
+          "symbol-placement": "point",
+          "text-field": "▲",
+          "text-size": 16,
+          "text-rotate": ["get", "bearing"] as never,
+          "text-rotation-alignment": "map",
+          "text-pitch-alignment": "map",
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: {
+          "text-color": color,
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 1.8,
+        },
+      });
+    } else {
+      map.setPaintProperty("auto-loop-candidate-arrows-symbol", "text-color", color);
+    }
   }
 
   function updateAutoLoopCandidateOverlay(
@@ -698,6 +878,8 @@ export default function RaceMap() {
       map.setPaintProperty("auto-loop-candidates-line", "line-color", color);
       map.setPaintProperty("auto-loop-candidates-line", "line-opacity", 0.88);
     }
+
+    updateAutoLoopCandidateArrowOverlay(candidate, color);
   }
 
   function clearAutoLoopCandidateOverlay() {
@@ -711,6 +893,14 @@ export default function RaceMap() {
     if (source) {
       source.setData(makeAutoLoopCandidateGeoJson(null));
     }
+
+    const arrowSource = map.getSource("auto-loop-candidate-arrows") as
+      | mapboxgl.GeoJSONSource
+      | undefined;
+
+    if (arrowSource) {
+      arrowSource.setData(makeEmptyPointFeatureCollection());
+    }
   }
 
   function clearAutoLoopCandidates() {
@@ -721,6 +911,7 @@ export default function RaceMap() {
     setAutoLoopPreviewCandidateId(null);
     setAutoLoopElevationSummaries({});
     setAutoLoopError(null);
+    setIsAutoLoopPanelCollapsed(false);
     clearAutoLoopCandidateOverlay();
   }
 
@@ -826,6 +1017,7 @@ export default function RaceMap() {
 
     setAutoLoopCandidates(nextCandidates);
     setAutoLoopCandidateCursor(startIndex + nextCandidates.length);
+    setIsAutoLoopPanelCollapsed(false);
 
     if (nextCandidates.length === 0) {
       setAutoLoopPreviewCandidateId(null);
@@ -1436,7 +1628,12 @@ export default function RaceMap() {
     window.setTimeout(() => {
       mapRef.current?.resize();
     }, 120);
-  }, [activePanel, isLeaderboardOpen, isAutoLoopPanelVisible]);
+  }, [
+    activePanel,
+    isLeaderboardOpen,
+    isAutoLoopPanelVisible,
+    isAutoLoopPanelCollapsed,
+  ]);
 
   useEffect(() => {
     Object.entries(botMarkerRefs.current).forEach(([botId, marker]) => {
@@ -1713,6 +1910,7 @@ export default function RaceMap() {
     if (isRunning) return;
 
     setAutoLoopError(null);
+    setGpsActionError(null);
     setCustomCourseError(null);
     setAutoLoopAllCandidates([]);
     setAutoLoopCandidates([]);
@@ -1721,6 +1919,7 @@ export default function RaceMap() {
     setAutoLoopElevationSummaries({});
     clearAutoLoopCandidateOverlay();
 
+    setIsAutoLoopPanelCollapsed(false);
     setActivePanel("map");
     setSetupView("main");
 
@@ -2031,6 +2230,12 @@ export default function RaceMap() {
                     커스텀 코스 만들기
                   </button>
                 </div>
+
+                {gpsActionError && (
+                  <div className="mt-2 rounded-lg bg-red-50 p-2 text-xs text-red-700">
+                    {gpsActionError}
+                  </div>
+                )}
               </div>
 
               <div className="rounded-xl border border-slate-200 bg-white p-3">
@@ -2324,141 +2529,165 @@ export default function RaceMap() {
       )}
 
       {activePanel === "map" && isAutoLoopPanelVisible && !isCustomCourseMode && (
-        <div className="race-panel race-auto-loop-panel">
+        <div
+          className={`race-panel race-auto-loop-panel ${
+            isAutoLoopPanelCollapsed ? "race-auto-loop-panel-collapsed" : ""
+          }`}
+        >
           <div className="mb-2 flex items-start justify-between gap-3">
             <div>
               <div className="text-sm font-bold text-slate-900">
                 자동 루프 후보
               </div>
               <div className="text-xs text-slate-500">{status}</div>
+              {isAutoLoopPanelCollapsed && previewingAutoLoopCandidate && (
+                <div className="mt-1 text-[11px] font-semibold text-blue-700">
+                  미리보기: {previewingAutoLoopCandidate.name} ·{" "}
+                  {(previewingAutoLoopCandidate.distanceM / 1000).toFixed(2)}km
+                </div>
+              )}
             </div>
 
-            <button
-              type="button"
-              onClick={handleCloseAutoLoopPanel}
-              className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700"
-            >
-              닫기
-            </button>
+            <div className="flex shrink-0 gap-1">
+              <button
+                type="button"
+                onClick={() => setIsAutoLoopPanelCollapsed((value) => !value)}
+                className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700"
+              >
+                {isAutoLoopPanelCollapsed ? "열기" : "접기"}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleCloseAutoLoopPanel}
+                className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700"
+              >
+                닫기
+              </button>
+            </div>
           </div>
 
-          {isGeneratingAutoLoop && (
-            <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
-              현재 위치와 주변 보행 경로를 기준으로 후보를 탐색 중입니다.
-            </div>
-          )}
+          {!isAutoLoopPanelCollapsed && (
+            <>
+              {isGeneratingAutoLoop && (
+                <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
+                  현재 위치와 주변 보행 경로를 기준으로 후보를 탐색 중입니다.
+                </div>
+              )}
 
-          {autoLoopError && (
-            <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
-              {autoLoopError}
-            </div>
-          )}
+              {autoLoopError && (
+                <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                  {autoLoopError}
+                </div>
+              )}
 
-          {autoLoopCandidates.length > 0 && (
-            <div className="space-y-2">
-              <div className="rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
-                표시 중: {autoLoopCandidateCursor - autoLoopCandidates.length + 1}
-                ~{autoLoopCandidateCursor} / {autoLoopAllCandidates.length}개 ·
-                남은 후보 {autoLoopRemainingCount}개
-              </div>
-
-              {autoLoopCandidates.map((candidate, index) => {
-                const isPreviewing =
-                  autoLoopPreviewCandidateId === candidate.candidateId;
-                const summary = autoLoopElevationSummaries[candidate.candidateId];
-
-                return (
-                  <div
-                    key={candidate.candidateId}
-                    className={`rounded-lg border p-2 ${
-                      isPreviewing
-                        ? "border-blue-300 bg-blue-50"
-                        : candidate.isWithinTolerance
-                          ? "border-emerald-200 bg-white"
-                          : "border-yellow-200 bg-yellow-50"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                          <span
-                            className="inline-block h-3 w-3 rounded-full"
-                            style={{
-                              backgroundColor: getAutoLoopCandidateColor(index),
-                            }}
-                          />
-                          {candidate.name}
-                          {isPreviewing && (
-                            <span className="rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-bold text-white">
-                              미리보기 중
-                            </span>
-                          )}
-                        </div>
-
-                        <div className="mt-1 text-xs text-slate-600">
-                          거리 {(candidate.distanceM / 1000).toFixed(2)}km · 오차{" "}
-                          {(candidate.distanceErrorM / 1000).toFixed(2)}km
-                        </div>
-
-                        <div className="text-[11px] text-slate-500">
-                          {candidate.isWithinTolerance
-                            ? "허용 오차 ±0.5km 안"
-                            : "허용 오차 밖"}
-                        </div>
-
-                        <div className="mt-1 text-[11px] font-medium text-slate-700">
-                          {formatElevationSummary(summary)}
-                        </div>
-                      </div>
-
-                      <div className="flex shrink-0 flex-col gap-1">
-                        <button
-                          type="button"
-                          onClick={() => handlePreviewAutoLoopCandidate(candidate, index)}
-                          className={`rounded-lg px-3 py-2 text-xs font-semibold ${
-                            isPreviewing
-                              ? "bg-blue-100 text-blue-700"
-                              : "bg-slate-100 text-slate-700"
-                          }`}
-                        >
-                          미리보기
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => handleApplyAutoLoopCandidate(candidate)}
-                          className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white"
-                        >
-                          선택
-                        </button>
-                      </div>
-                    </div>
+              {autoLoopCandidates.length > 0 && (
+                <div className="space-y-2">
+                  <div className="rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
+                    표시 중: {autoLoopCandidateCursor - autoLoopCandidates.length + 1}
+                    ~{autoLoopCandidateCursor} / {autoLoopAllCandidates.length}개 ·
+                    남은 후보 {autoLoopRemainingCount}개
                   </div>
-                );
-              })}
 
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={handleShowMoreAutoLoopCandidates}
-                  disabled={autoLoopRemainingCount <= 0}
-                  className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
-                >
-                  후보 다시 찾기
-                </button>
+                  {autoLoopCandidates.map((candidate, index) => {
+                    const isPreviewing =
+                      autoLoopPreviewCandidateId === candidate.candidateId;
+                    const summary = autoLoopElevationSummaries[candidate.candidateId];
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActivePanel("setup");
-                    setSetupView("main");
-                  }}
-                  className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700"
-                >
-                  설정으로
-                </button>
-              </div>
-            </div>
+                    return (
+                      <div
+                        key={candidate.candidateId}
+                        className={`rounded-lg border p-2 ${
+                          isPreviewing
+                            ? "border-blue-300 bg-blue-50"
+                            : candidate.isWithinTolerance
+                              ? "border-emerald-200 bg-white"
+                              : "border-yellow-200 bg-yellow-50"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                              <span
+                                className="inline-block h-3 w-3 rounded-full"
+                                style={{
+                                  backgroundColor: getAutoLoopCandidateColor(index),
+                                }}
+                              />
+                              {candidate.name}
+                              {isPreviewing && (
+                                <span className="rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-bold text-white">
+                                  미리보기 중
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="mt-1 text-xs text-slate-600">
+                              거리 {(candidate.distanceM / 1000).toFixed(2)}km · 오차{" "}
+                              {(candidate.distanceErrorM / 1000).toFixed(2)}km
+                            </div>
+
+                            <div className="text-[11px] text-slate-500">
+                              {candidate.isWithinTolerance
+                                ? "허용 오차 ±0.5km 안"
+                                : "허용 오차 밖"}
+                            </div>
+
+                            <div className="mt-1 text-[11px] font-medium text-slate-700">
+                              {formatElevationSummary(summary)}
+                            </div>
+                          </div>
+
+                          <div className="flex shrink-0 flex-col gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handlePreviewAutoLoopCandidate(candidate, index)}
+                              className={`rounded-lg px-3 py-2 text-xs font-semibold ${
+                                isPreviewing
+                                  ? "bg-blue-100 text-blue-700"
+                                  : "bg-slate-100 text-slate-700"
+                              }`}
+                            >
+                              미리보기
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleApplyAutoLoopCandidate(candidate)}
+                              className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white"
+                            >
+                              선택
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={handleShowMoreAutoLoopCandidates}
+                      disabled={autoLoopRemainingCount <= 0}
+                      className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                    >
+                      후보 다시 찾기
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActivePanel("setup");
+                        setSetupView("main");
+                      }}
+                      className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700"
+                    >
+                      설정으로
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -2844,6 +3073,11 @@ export default function RaceMap() {
           max-height: min(66vh, 560px);
         }
 
+        .race-auto-loop-panel-collapsed {
+          max-height: 104px;
+          overflow: hidden;
+        }
+
         .race-runner-list {
           max-height: 210px;
         }
@@ -2924,6 +3158,10 @@ export default function RaceMap() {
             max-height: none;
           }
 
+          .race-auto-loop-panel-collapsed {
+            max-height: 104px;
+          }
+
           .race-map-hud-collapsed {
             height: auto;
             max-height: 176px;
@@ -2971,6 +3209,10 @@ export default function RaceMap() {
           .race-custom-panel,
           .race-auto-loop-panel {
             max-height: calc(100dvh - 88px);
+          }
+
+          .race-auto-loop-panel-collapsed {
+            max-height: 110px;
           }
 
           .race-map-hud-collapsed {
