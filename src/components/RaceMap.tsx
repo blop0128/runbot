@@ -3781,7 +3781,77 @@ export default function RaceMap() {
 
 
   return (
-    <div className="race-root">
+    <div
+      className={`race-root ${
+        activePanel === "setup" ? "race-root-setup" : "race-root-map"
+      }`}
+    >
+      <svg
+        className="liquid-filter-svg"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <defs>
+          <filter
+            id="liquid-glass-soft"
+            x="-20%"
+            y="-20%"
+            width="140%"
+            height="140%"
+            colorInterpolationFilters="sRGB"
+          >
+            <feTurbulence
+              type="fractalNoise"
+              baseFrequency="0.018 0.026"
+              numOctaves="2"
+              seed="11"
+              result="liquidNoise"
+            />
+            <feGaussianBlur
+              in="liquidNoise"
+              stdDeviation="0.6"
+              result="softNoise"
+            />
+            <feDisplacementMap
+              in="SourceGraphic"
+              in2="softNoise"
+              scale="2.2"
+              xChannelSelector="R"
+              yChannelSelector="G"
+            />
+          </filter>
+
+          <filter
+            id="liquid-background-warp"
+            x="-20%"
+            y="-20%"
+            width="140%"
+            height="140%"
+            colorInterpolationFilters="sRGB"
+          >
+            <feTurbulence
+              type="fractalNoise"
+              baseFrequency="0.010 0.014"
+              numOctaves="3"
+              seed="23"
+              result="backgroundNoise"
+            />
+            <feGaussianBlur
+              in="backgroundNoise"
+              stdDeviation="1.1"
+              result="backgroundSoftNoise"
+            />
+            <feDisplacementMap
+              in="SourceGraphic"
+              in2="backgroundSoftNoise"
+              scale="8"
+              xChannelSelector="R"
+              yChannelSelector="B"
+            />
+          </filter>
+        </defs>
+      </svg>
+
       <div ref={mapContainerRef} className="race-map" />
 
       {activePanel === "setup" && <div className="setup-background" />}
@@ -6068,6 +6138,149 @@ export default function RaceMap() {
             right: 8px;
           }
         }
+
+        /* =========================================================
+           Setup background isolation + SVG-enhanced liquid glass
+           - Hide Mapbox canvas behind setup tab
+           - Keep map tab untouched
+           - Use SVG filters only on decorative layers, not on text
+           ========================================================= */
+        .liquid-filter-svg {
+          position: absolute;
+          width: 0;
+          height: 0;
+          overflow: hidden;
+          pointer-events: none;
+        }
+
+        .race-root-setup .race-map {
+          opacity: 0 !important;
+          visibility: hidden !important;
+          pointer-events: none !important;
+        }
+
+        .race-root-map .race-map {
+          opacity: 1 !important;
+          visibility: visible !important;
+          pointer-events: auto;
+        }
+
+        .race-root-setup .setup-background {
+          position: absolute;
+          inset: 0;
+          z-index: 20;
+          overflow: hidden;
+          background:
+            radial-gradient(
+              circle at 17% 8%,
+              rgba(255, 255, 255, 0.96),
+              transparent 34%
+            ),
+            radial-gradient(
+              circle at 78% 14%,
+              rgba(219, 234, 254, 0.58),
+              transparent 29%
+            ),
+            radial-gradient(
+              circle at 16% 88%,
+              rgba(220, 252, 231, 0.42),
+              transparent 31%
+            ),
+            radial-gradient(
+              circle at 84% 82%,
+              rgba(254, 226, 226, 0.26),
+              transparent 32%
+            ),
+            linear-gradient(
+              135deg,
+              #f8fafc 0%,
+              #eef2f7 47%,
+              #fbfdff 100%
+            ) !important;
+          background-image: none !important;
+          background-size: auto !important;
+          background-position: center !important;
+          background-repeat: no-repeat !important;
+        }
+
+        .race-root-setup .setup-background::before {
+          content: "";
+          position: absolute;
+          inset: -16%;
+          z-index: 0;
+          background:
+            linear-gradient(
+              118deg,
+              transparent 0 18%,
+              rgba(255, 255, 255, 0.62) 18.6% 19.4%,
+              transparent 20% 100%
+            ),
+            linear-gradient(
+              27deg,
+              transparent 0 57%,
+              rgba(255, 255, 255, 0.38) 58% 59.2%,
+              transparent 60% 100%
+            ),
+            radial-gradient(
+              circle at 42% 28%,
+              rgba(255, 255, 255, 0.44),
+              transparent 30%
+            );
+          filter: url("#liquid-background-warp") blur(0.25px);
+          opacity: 0.80;
+          pointer-events: none;
+        }
+
+        .race-root-setup .setup-background::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: 0;
+          background:
+            radial-gradient(
+              circle at 50% -8%,
+              rgba(255, 255, 255, 0.84),
+              transparent 39%
+            ),
+            linear-gradient(
+              to bottom,
+              rgba(255, 255, 255, 0.08),
+              rgba(255, 255, 255, 0.34)
+            );
+          pointer-events: none;
+        }
+
+        .hero-glass-card::before,
+        .race-tab-button::before,
+        .course-action-button::before,
+        .course-action-primary::before,
+        .target-distance-popover::before,
+        .run-settings-panel::before,
+        .race-map-hud::before,
+        .race-custom-panel::before,
+        .race-auto-loop-panel::before,
+        .race-setup-panel .rounded-xl.border::before,
+        .race-setup-panel .rounded-lg.border::before,
+        .race-setup-panel .rounded-xl[class*="border"]::before,
+        .race-setup-panel .rounded-lg[class*="border"]::before {
+          filter: url("#liquid-glass-soft");
+        }
+
+        @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+          .hero-glass-card,
+          .race-tab-button,
+          .course-action-button,
+          .course-action-primary,
+          .run-settings-panel,
+          .race-map-hud,
+          .race-custom-panel,
+          .race-auto-loop-panel,
+          .race-setup-panel .rounded-xl.border,
+          .race-setup-panel .rounded-lg.border {
+            background: rgba(255, 255, 255, 0.82) !important;
+          }
+        }
+
       `}</style>
 
     </div>
