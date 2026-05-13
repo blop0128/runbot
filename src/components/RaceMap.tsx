@@ -4,8 +4,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
 import { HAN_RIVER_YEOUIDO_5K } from "@/lib/courses/hanRiver";
 import {
+  generateAutoLoopCourseCandidates,
   generateCustomWalkingCourse,
   generateLocalOutAndBackCourse,
+  type AutoLoopCourseCandidate,
   type Course,
   type LngLat,
 } from "@/lib/courses/generateLocalCourse";
@@ -370,6 +372,13 @@ export default function RaceMap() {
   const [isGeneratingCourse, setIsGeneratingCourse] = useState(false);
   const [isGeneratingCustomCourse, setIsGeneratingCustomCourse] =
     useState(false);
+  const [isGeneratingAutoLoop, setIsGeneratingAutoLoop] = useState(false);
+  const [autoLoopTargetKm, setAutoLoopTargetKm] = useState("3.0");
+  const [autoLoopCandidates, setAutoLoopCandidates] = useState<
+    AutoLoopCourseCandidate[]
+  >([]);
+  const [autoLoopError, setAutoLoopError] = useState<string | null>(null);
+
   const [isRunning, setIsRunning] = useState(false);
   const [startTimeMs, setStartTimeMs] = useState<number | null>(null);
   const [elapsedSec, setElapsedSec] = useState(0);
@@ -385,8 +394,7 @@ export default function RaceMap() {
   const [isCustomCourseMode, setIsCustomCourseMode] = useState(false);
   const [customPointStep, setCustomPointStep] =
     useState<CustomPointStep>("start");
-  const [customGuide, setCustomGuide] =
-    useState<CustomGuide>(null);
+  const [customGuide, setCustomGuide] = useState<CustomGuide>(null);
   const [customPoints, setCustomPoints] =
     useState<CustomCoursePoints>(INITIAL_CUSTOM_POINTS);
   const [customCourseError, setCustomCourseError] = useState<string | null>(
@@ -662,6 +670,7 @@ export default function RaceMap() {
     clearCustomPointMarkers();
 
     setIsCustomCourseMode(false);
+    setCustomGuide(null);
     setActiveCourse(nextCourse);
     setActivePanel("map");
     setSetupView("main");
@@ -755,6 +764,144 @@ export default function RaceMap() {
     setCustomGuide(null);
   }
 
+  function parseAutoLoopTargetDistanceM(): number {
+    const parsed = Number(autoLoopTargetKm.replace(",", "."));
+
+    if (!Number.isFinite(parsed)) {
+      return NaN;
+    }
+
+    return parsed * 1000;
+  }
+
+  async function handleGenerateAutoLoopCandidates() {
+    if (isRunning) return;
+
+    setAutoLoopError(null);
+    setGpsActionError(null);
+    setCustomCourseError(null);
+    setAutoLoopCandidates([]);
+
+    if (isSecureContextState === false) {
+      setAutoLoopError("자동 루프 코스 생성은 HTTPS 환경에서 테스트해야 합니다.");
+      return;
+    }
+
+    const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+
+    if (!token) {
+      setAutoLoopError("Mapbox token이 없습니다.");
+      return;
+    }
+
+    const targetDistanceM = parseAutoLoopTargetDistanceM();
+
+    if (!Number.isFinite(targetDistanceM) || targetDistanceM <= 0) {
+      setAutoLoopError("목표 거리를 올바르게 입력해 주세요.");
+      return;
+    }
+
+    try {
+      setIsGeneratingAutoLoop(true);
+      setStatus("현재 위치를 가져오는 중...");
+
+      const position = await getCurrentPosition();
+      const accuracy = position.coords.accuracy;
+
+      if (accuracy > 120) {
+        setAutoLoopError(
+          `현재 위치 정확도가 낮습니다. accuracy=${accuracy.toFixed(
+            1
+          )}m. 야외에서 다시 시도하세요.`
+        );
+        setStatus("현재 위치 정확도 부족");
+        return;
+      }
+
+      const origin: LngLat = [
+        position.coords.longitude,
+        position.coords.latitude,
+      ];
+
+      playerMarkerRef.current?.setLngLat(origin);
+      mapRef.current?.flyTo({
+        center: origin,
+        zoom: 15.5,
+        duration: 600,
+      });
+
+      setStatus(
+        `현재 위치 기준 ${(targetDistanceM / 1000).toFixed(
+          1
+        )}km 자동 루프 후보를 찾는 중...`
+      );
+
+      const candidates = await generateAutoLoopCourseCandidates({
+        origin,
+        token,
+        targetDistanceM,
+        toleranceM: 500,
+      });
+
+      if (candidates.length === 0) {
+        setAutoLoopError("생성 가능한 루프 후보를 찾지 못했습니다.");
+        setStatus("자동 루프 후보 없음");
+        return;
+      }
+
+      setAutoLoopCandidates(candidates);
+
+      const hasWithinTolerance = candidates.some(
+        (candidate) => candidate.isWithinTolerance
+      );
+
+      if (hasWithinTolerance) {
+        setStatus(
+          `±0.5km 안의 자동 루프 후보 ${candidates.length}개를 찾았습니다.`
+        );
+      } else {
+        setStatus(
+          "±0.5km 안의 후보가 없어 목표 거리와 가장 가까운 후보를 표시합니다."
+        );
+      }
+    } catch (rawError) {
+      const message = getPositionErrorMessage(rawError);
+
+      setAutoLoopError(message);
+      setStatus("자동 루프 후보 생성 실패");
+    } finally {
+      setIsGeneratingAutoLoop(false);
+    }
+  }
+
+  function handleApplyAutoLoopCandidate(candidate: AutoLoopCourseCandidate) {
+    const nextCourse: Course = {
+      id: candidate.id,
+      name: `${candidate.name} · ${(candidate.distanceM / 1000).toFixed(2)}km`,
+      distanceM: candidate.distanceM,
+      polyline: candidate.polyline,
+    };
+
+    gpsTracker.stop();
+    latestGpsProjectionRef.current = null;
+    clearCustomPointMarkers();
+
+    setIsCustomCourseMode(false);
+    setCustomGuide(null);
+    setCustomPoints(INITIAL_CUSTOM_POINTS);
+    setPlayerMode("gps");
+    setActiveCourse(nextCourse);
+    setActivePanel("map");
+    setSetupView("main");
+    setAutoLoopError(null);
+    setAutoLoopCandidates([]);
+    setStatus(
+      `자동 루프 코스 적용 완료 · ${(candidate.distanceM / 1000).toFixed(
+        2
+      )}km`
+    );
+  }
+
   useEffect(() => {
     setIsSecureContextState(
       typeof window !== "undefined" ? window.isSecureContext : null
@@ -782,8 +929,8 @@ export default function RaceMap() {
           .map(validateSavedCourseRecord)
           .filter((course): course is SavedCourseRecord => Boolean(course))
       );
-    } catch (error) {
-      console.warn("Failed to load saved courses:", error);
+    } catch (loadError) {
+      console.warn("Failed to load saved courses:", loadError);
       setSavedCourses([]);
     } finally {
       setHasLoadedSavedCourses(true);
@@ -1134,6 +1281,8 @@ export default function RaceMap() {
 
     setGpsActionError(null);
     setCustomCourseError(null);
+    setAutoLoopError(null);
+    setAutoLoopCandidates([]);
 
     if (isSecureContextState === false) {
       setGpsActionError("현재 위치 기준 코스 생성은 HTTPS 환경에서 테스트해야 합니다.");
@@ -1506,6 +1655,94 @@ export default function RaceMap() {
                     {activeCourse.name}
                   </div>
                   <div>길이: {(courseLengthM / 1000).toFixed(2)} km</div>
+                </div>
+
+                <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-2">
+                  <div className="mb-2 text-xs font-semibold text-slate-700">
+                    현재 위치 기준 자동 루프
+                  </div>
+
+                  <div className="grid grid-cols-[1fr_auto] gap-2">
+                    <label className="space-y-1">
+                      <div className="text-[11px] font-medium text-slate-500">
+                        목표 거리 km
+                      </div>
+                      <input
+                        value={autoLoopTargetKm}
+                        onChange={(event) => setAutoLoopTargetKm(event.target.value)}
+                        disabled={isRunning || isGeneratingAutoLoop}
+                        inputMode="decimal"
+                        className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 disabled:bg-slate-100"
+                      />
+                    </label>
+
+                    <button
+                      type="button"
+                      onClick={handleGenerateAutoLoopCandidates}
+                      disabled={isRunning || isGeneratingAutoLoop}
+                      className="self-end rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                    >
+                      {isGeneratingAutoLoop ? "탐색 중..." : "후보 찾기"}
+                    </button>
+                  </div>
+
+                  <div className="mt-2 text-[11px] text-slate-500">
+                    목표 거리 ±0.5km 안에 들어오는 루프 후보를 우선 표시합니다.
+                  </div>
+
+                  {autoLoopError && (
+                    <div className="mt-2 rounded-lg bg-red-50 p-2 text-xs text-red-700">
+                      {autoLoopError}
+                    </div>
+                  )}
+
+                  {autoLoopCandidates.length > 0 && (
+                    <div className="mt-2 space-y-2">
+                      {autoLoopCandidates.every(
+                        (candidate) => !candidate.isWithinTolerance
+                      ) && (
+                        <div className="rounded-lg bg-yellow-50 p-2 text-xs text-yellow-800">
+                          ±0.5km 안의 후보가 없어 목표 거리와 가장 가까운 후보를 표시합니다.
+                        </div>
+                      )}
+
+                      {autoLoopCandidates.map((candidate, index) => (
+                        <div
+                          key={candidate.candidateId}
+                          className={`rounded-lg border p-2 ${
+                            candidate.isWithinTolerance
+                              ? "border-emerald-200 bg-white"
+                              : "border-yellow-200 bg-yellow-50"
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <div className="text-sm font-semibold text-slate-900">
+                                후보 {index + 1}
+                              </div>
+                              <div className="text-xs text-slate-600">
+                                거리 {(candidate.distanceM / 1000).toFixed(2)}km · 오차{" "}
+                                {(candidate.distanceErrorM / 1000).toFixed(2)}km
+                              </div>
+                              <div className="text-[11px] text-slate-500">
+                                {candidate.isWithinTolerance
+                                  ? "허용 오차 안"
+                                  : "허용 오차 밖"}
+                              </div>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => handleApplyAutoLoopCandidate(candidate)}
+                              className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white"
+                            >
+                              선택
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <div className="mt-3 grid grid-cols-1 gap-2">

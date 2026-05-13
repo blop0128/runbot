@@ -7,6 +7,14 @@ export type Course = {
   polyline: LngLat[];
 };
 
+export type AutoLoopCourseCandidate = Course & {
+  candidateId: string;
+  targetDistanceM: number;
+  distanceErrorM: number;
+  isWithinTolerance: boolean;
+  waypoints: LngLat[];
+};
+
 function toRadians(degrees: number): number {
   return (degrees * Math.PI) / 180;
 }
@@ -177,6 +185,68 @@ async function fetchWalkingSegment(params: {
   }
 }
 
+async function fetchWalkingRouteThroughPoints(params: {
+  points: LngLat[];
+  token: string;
+}): Promise<{ coordinates: LngLat[]; distanceM: number } | null> {
+  const { points, token } = params;
+
+  if (points.length < 2) {
+    return null;
+  }
+
+  const coordinateString = points
+    .map(([lng, lat]) => `${lng},${lat}`)
+    .join(";");
+
+  const url =
+    `https://api.mapbox.com/directions/v5/mapbox/walking/${coordinateString}` +
+    `?geometries=geojson&overview=full&steps=false&access_token=${token}`;
+
+  try {
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      console.warn("Mapbox multi-point route failed:", await response.text());
+      return null;
+    }
+
+    const data = await response.json();
+    const route = data.routes?.[0];
+
+    if (
+      !route?.geometry?.coordinates ||
+      !Array.isArray(route.geometry.coordinates)
+    ) {
+      console.warn("Mapbox multi-point route returned invalid geometry:", data);
+      return null;
+    }
+
+    const rawCoordinates = route.geometry.coordinates as LngLat[];
+    const distanceM = Number(route.distance);
+
+    if (
+      rawCoordinates.length < 2 ||
+      !Number.isFinite(distanceM) ||
+      distanceM <= 0
+    ) {
+      return null;
+    }
+
+    return {
+      coordinates: normalizeSegmentCoordinates(
+        rawCoordinates,
+        points[0],
+        points[points.length - 1]
+      ),
+      distanceM,
+    };
+  } catch (error) {
+    console.warn("Failed to fetch walking route through points:", error);
+    return null;
+  }
+}
+
 function combineSegments(segments: LngLat[][]): LngLat[] {
   const combined: LngLat[] = [];
 
@@ -192,6 +262,12 @@ function combineSegments(segments: LngLat[][]): LngLat[] {
   });
 
   return combined;
+}
+
+function makeCandidateKey(points: LngLat[]): string {
+  return points
+    .map(([lng, lat]) => `${lng.toFixed(5)},${lat.toFixed(5)}`)
+    .join("|");
 }
 
 export async function generateCustomWalkingCourse(params: {
@@ -275,4 +351,90 @@ export async function generateLocalOutAndBackCourse(params: {
     token,
     name: "현재 위치 1K 테스트 코스",
   });
+}
+
+export async function generateAutoLoopCourseCandidates(params: {
+  origin: LngLat;
+  token: string;
+  targetDistanceM: number;
+  toleranceM?: number;
+}): Promise<AutoLoopCourseCandidate[]> {
+  const { origin, token, targetDistanceM, toleranceM = 500 } = params;
+
+  if (!Number.isFinite(targetDistanceM) || targetDistanceM <= 0) {
+    throw new Error("목표 거리가 올바르지 않습니다.");
+  }
+
+  const bearings = [0, 45, 90, 135, 180, 225, 270, 315];
+  const turnAngles = [80, 115];
+  const scaleFactors = [0.75, 0.9, 1.05, 1.2];
+
+  const candidates: AutoLoopCourseCandidate[] = [];
+  const seen = new Set<string>();
+  let candidateIndex = 1;
+
+  for (const baseBearing of bearings) {
+    for (const turnAngle of turnAngles) {
+      for (const scaleFactor of scaleFactors) {
+        const radiusM =
+          (targetDistanceM /
+            (2 * (1 + Math.sin(toRadians(turnAngle) / 2)))) *
+          scaleFactor;
+
+        const waypointA = destinationPoint(origin, radiusM, baseBearing);
+        const waypointB = destinationPoint(
+          origin,
+          radiusM,
+          baseBearing + turnAngle
+        );
+
+        const points = [origin, waypointA, waypointB, origin];
+        const key = makeCandidateKey(points);
+
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        const route = await fetchWalkingRouteThroughPoints({
+          points,
+          token,
+        });
+
+        if (!route) continue;
+
+        const distanceM = Math.round(route.distanceM);
+        const distanceErrorM = Math.abs(distanceM - targetDistanceM);
+        const isWithinTolerance = distanceErrorM <= toleranceM;
+
+        candidates.push({
+          id: `auto-loop-${Date.now()}-${candidateIndex}`,
+          candidateId: `auto-loop-candidate-${candidateIndex}`,
+          name: `자동 루프 후보 ${candidateIndex}`,
+          distanceM,
+          polyline: route.coordinates,
+          targetDistanceM,
+          distanceErrorM,
+          isWithinTolerance,
+          waypoints: points,
+        });
+
+        candidateIndex += 1;
+      }
+    }
+  }
+
+  const sorted = candidates.sort((a, b) => {
+    if (a.isWithinTolerance !== b.isWithinTolerance) {
+      return a.isWithinTolerance ? -1 : 1;
+    }
+
+    return a.distanceErrorM - b.distanceErrorM;
+  });
+
+  const withinTolerance = sorted.filter((candidate) => candidate.isWithinTolerance);
+
+  if (withinTolerance.length > 0) {
+    return withinTolerance;
+  }
+
+  return sorted.slice(0, 5);
 }
