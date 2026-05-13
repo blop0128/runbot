@@ -7603,6 +7603,152 @@ export default function RaceMap() {
             inset 0 3px 10px rgba(15, 23, 42, 0.22),
             inset 0 1px 0 rgba(255, 255, 255, 0.18) !important;
         }
+
+        /* =========================================================
+           Final selection-state override
+           - Put this after every generic liquid button rule.
+           - Selected controls must stay black glass.
+           - Unselected controls must stay transparent glass.
+           - Disabled controls keep transparent glass and gray text only.
+           ========================================================= */
+        .race-root button.liquid-selected-control:not(:disabled),
+        .race-root-setup button.liquid-selected-control:not(:disabled),
+        .race-root-setup button.distance-preset-button.liquid-selected-control:not(:disabled),
+        .race-root-setup button.liquid-choice-button.liquid-selected-control:not(:disabled),
+        .run-settings-panel button.liquid-selected-control:not(:disabled),
+        button.liquid-selected-control:not(:disabled) {
+          border-color: rgba(255, 255, 255, 0.52) !important;
+          background-color: rgba(8, 13, 23, 0.88) !important;
+          background-image:
+            radial-gradient(
+              circle at 24% 0%,
+              rgba(255, 255, 255, 0.26),
+              transparent 38%
+            ),
+            linear-gradient(
+              135deg,
+              rgba(8, 13, 23, 0.92),
+              rgba(17, 24, 39, 0.78) 48%,
+              rgba(31, 41, 55, 0.66)
+            ) !important;
+          color: rgba(255, 255, 255, 0.98) !important;
+          text-shadow: 0 1px 2px rgba(0, 0, 0, 0.40) !important;
+          opacity: 1 !important;
+          filter: none !important;
+          backdrop-filter: blur(30px) saturate(185%) brightness(1.02) !important;
+          -webkit-backdrop-filter: blur(30px) saturate(185%) brightness(1.02) !important;
+          box-shadow:
+            0 16px 38px rgba(15, 23, 42, 0.24),
+            inset 0 1px 0 rgba(255, 255, 255, 0.36),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.10) !important;
+        }
+
+        .race-root button.liquid-selected-control:not(:disabled)::before,
+        .race-root-setup button.liquid-selected-control:not(:disabled)::before,
+        .race-root-setup button.distance-preset-button.liquid-selected-control:not(:disabled)::before,
+        .race-root-setup button.liquid-choice-button.liquid-selected-control:not(:disabled)::before,
+        .run-settings-panel button.liquid-selected-control:not(:disabled)::before,
+        button.liquid-selected-control:not(:disabled)::before {
+          content: "";
+          position: absolute;
+          inset: 1px;
+          z-index: -1;
+          border-radius: inherit;
+          background:
+            linear-gradient(
+              180deg,
+              rgba(255, 255, 255, 0.30),
+              rgba(255, 255, 255, 0.07) 42%,
+              transparent 70%
+            ) !important;
+          opacity: 0.88 !important;
+          pointer-events: none;
+          filter: url("#liquid-glass-soft");
+        }
+
+        .race-root button.liquid-selected-control:not(:disabled) *,
+        .race-root-setup button.liquid-selected-control:not(:disabled) *,
+        .run-settings-panel button.liquid-selected-control:not(:disabled) *,
+        button.liquid-selected-control:not(:disabled) * {
+          color: rgba(255, 255, 255, 0.98) !important;
+          text-shadow: 0 1px 2px rgba(0, 0, 0, 0.34) !important;
+        }
+
+        .race-root button.liquid-clear-control:not(:disabled),
+        .race-root-setup button.liquid-clear-control:not(:disabled),
+        .race-root-setup button.distance-preset-button.liquid-clear-control:not(:disabled),
+        .race-root-setup button.liquid-choice-button.liquid-clear-control:not(:disabled),
+        .run-settings-panel button.liquid-clear-control:not(:disabled),
+        button.liquid-clear-control:not(:disabled) {
+          border-color: rgba(148, 163, 184, 0.34) !important;
+          background-color: rgba(255, 255, 255, 0.10) !important;
+          background-image:
+            radial-gradient(
+              circle at 24% 0%,
+              rgba(255, 255, 255, 0.42),
+              transparent 36%
+            ),
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.19),
+              rgba(255, 255, 255, 0.04)
+            ) !important;
+          color: rgba(15, 23, 42, 0.92) !important;
+          text-shadow: none !important;
+          opacity: 1 !important;
+          backdrop-filter: blur(30px) saturate(175%) brightness(1.04) !important;
+          -webkit-backdrop-filter: blur(30px) saturate(175%) brightness(1.04) !important;
+          box-shadow:
+            0 10px 24px rgba(15, 23, 42, 0.055),
+            inset 0 1px 0 rgba(255, 255, 255, 0.76),
+            inset 0 -1px 0 rgba(15, 23, 42, 0.04) !important;
+        }
+
+        .race-root button.liquid-clear-control:not(:disabled) *,
+        .race-root-setup button.liquid-clear-control:not(:disabled) *,
+        .run-settings-panel button.liquid-clear-control:not(:disabled) *,
+        button.liquid-clear-control:not(:disabled) * {
+          color: rgba(15, 23, 42, 0.92) !important;
+          text-shadow: none !important;
+        }
+
+        .race-root button.liquid-selected-control:disabled,
+        .race-root button.liquid-clear-control:disabled,
+        .race-root-setup button.liquid-selected-control:disabled,
+        .race-root-setup button.liquid-clear-control:disabled,
+        .run-settings-panel button.liquid-selected-control:disabled,
+        .run-settings-panel button.liquid-clear-control:disabled,
+        button.liquid-selected-control:disabled,
+        button.liquid-clear-control:disabled {
+          border-color: rgba(148, 163, 184, 0.24) !important;
+          background-color: rgba(255, 255, 255, 0.08) !important;
+          background-image:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.12),
+              rgba(255, 255, 255, 0.03)
+            ) !important;
+          color: rgba(100, 116, 139, 0.56) !important;
+          text-shadow: none !important;
+          opacity: 1 !important;
+          filter: none !important;
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.48),
+            0 8px 18px rgba(15, 23, 42, 0.035) !important;
+        }
+
+        .race-root button.liquid-selected-control:disabled *,
+        .race-root button.liquid-clear-control:disabled *,
+        .race-root-setup button.liquid-selected-control:disabled *,
+        .race-root-setup button.liquid-clear-control:disabled *,
+        .run-settings-panel button.liquid-selected-control:disabled *,
+        .run-settings-panel button.liquid-clear-control:disabled *,
+        button.liquid-selected-control:disabled *,
+        button.liquid-clear-control:disabled * {
+          color: rgba(100, 116, 139, 0.56) !important;
+          text-shadow: none !important;
+        }
+
       `}</style>
 
     </div>
