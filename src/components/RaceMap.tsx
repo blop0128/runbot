@@ -503,6 +503,169 @@ function getDrawRouteWaypointSamples(points: LngLat[]): LngLat[] {
   return uniqueIndexes.map((index) => points[index]);
 }
 
+function samplePolylineByRatio(polyline: LngLat[], ratio: number): LngLat {
+  if (polyline.length === 0) return DEFAULT_CENTER;
+
+  const distanceM = getPolylineLengthM(polyline);
+
+  if (distanceM <= 0) {
+    return polyline[Math.min(polyline.length - 1, Math.max(0, Math.round((polyline.length - 1) * ratio)))];
+  }
+
+  return getLngLatAtDistance(polyline, distanceM * Math.min(1, Math.max(0, ratio)));
+}
+
+function samplePolylineEvenly(polyline: LngLat[], count: number): LngLat[] {
+  if (polyline.length === 0) return [];
+  if (polyline.length === 1 || count <= 1) return [polyline[0]];
+
+  const safeCount = Math.max(2, count);
+
+  return Array.from({ length: safeCount }, (_, index) =>
+    samplePolylineByRatio(polyline, index / (safeCount - 1))
+  );
+}
+
+function getDrawnRouteCentroid(points: LngLat[]): LngLat {
+  if (points.length === 0) return DEFAULT_CENTER;
+
+  const sum = points.reduce(
+    (acc, point) => {
+      acc.lng += point[0];
+      acc.lat += point[1];
+      return acc;
+    },
+    { lng: 0, lat: 0 }
+  );
+
+  return [sum.lng / points.length, sum.lat / points.length];
+}
+
+function getDrawnRouteRadiusStats(points: LngLat[]): {
+  averageRadiusM: number;
+  maxRadiusM: number;
+} {
+  if (points.length === 0) {
+    return { averageRadiusM: 0, maxRadiusM: 0 };
+  }
+
+  const center = getDrawnRouteCentroid(points);
+  const distances = points.map((point) => haversineDistanceM(center, point));
+  const sum = distances.reduce((acc, value) => acc + value, 0);
+
+  return {
+    averageRadiusM: sum / distances.length,
+    maxRadiusM: Math.max(...distances),
+  };
+}
+
+function isLikelyCircularDrawnRoute(points: LngLat[]): boolean {
+  if (points.length < 12) return false;
+
+  const start = points[0];
+  const finish = points[points.length - 1];
+  const drawnDistanceM = getPolylineLengthM(points);
+  const closureDistanceM = haversineDistanceM(start, finish);
+  const radiusStats = getDrawnRouteRadiusStats(points);
+
+  if (drawnDistanceM < 450 || radiusStats.averageRadiusM < 80) return false;
+
+  const closureLimitM = Math.min(420, Math.max(110, drawnDistanceM * 0.22));
+
+  return closureDistanceM <= closureLimitM;
+}
+
+function getLoopWaypointAttempts(points: LngLat[]): LngLat[][] {
+  if (points.length < 2) return [];
+
+  const start = points[0];
+  const fractionsList = [
+    [0, 0.25, 0.5, 0.75],
+    [0, 0.2, 0.4, 0.6, 0.8],
+    [0, 1 / 6, 2 / 6, 3 / 6, 4 / 6, 5 / 6],
+  ];
+
+  const attempts = fractionsList.map((fractions) => {
+    const sampled = fractions.map((ratio) => samplePolylineByRatio(points, ratio));
+    return [...sampled, start];
+  });
+
+  const simplified = samplePolylineEvenly(points, 8);
+  if (simplified.length >= 4) {
+    attempts.push([...simplified.slice(0, -1), start]);
+  }
+
+  const seen = new Set<string>();
+
+  return attempts
+    .map((attempt) => {
+      const compact: LngLat[] = [];
+
+      attempt.forEach((point, index) => {
+        const previous = compact[compact.length - 1];
+
+        if (!previous || haversineDistanceM(previous, point) >= 35 || index === attempt.length - 1) {
+          compact.push(point);
+        }
+      });
+
+      if (compact.length >= 2) {
+        compact[0] = start;
+        compact[compact.length - 1] = start;
+      }
+
+      return compact;
+    })
+    .filter((attempt) => attempt.length >= 4)
+    .filter((attempt) => {
+      const key = makeDrawAttemptKey(attempt);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function minDistanceToPolylineSamplesM(point: LngLat, samples: LngLat[]): number {
+  if (samples.length === 0) return Number.POSITIVE_INFINITY;
+
+  return samples.reduce((best, sample) => {
+    return Math.min(best, haversineDistanceM(point, sample));
+  }, Number.POSITIVE_INFINITY);
+}
+
+function calculateDrawRouteShapeScore({
+  routePolyline,
+  drawnPoints,
+  distanceErrorM,
+  isCircular,
+}: {
+  routePolyline: LngLat[];
+  drawnPoints: LngLat[];
+  distanceErrorM: number;
+  isCircular: boolean;
+}): number {
+  const drawnSamples = samplePolylineEvenly(drawnPoints, 48);
+  const routeSamples = samplePolylineEvenly(routePolyline, 48);
+
+  if (drawnSamples.length === 0 || routeSamples.length === 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const distances = routeSamples.map((point) =>
+    minDistanceToPolylineSamplesM(point, drawnSamples)
+  );
+  const averageDistanceM =
+    distances.reduce((acc, value) => acc + value, 0) / distances.length;
+  const maxDistanceM = Math.max(...distances);
+  const start = drawnPoints[0];
+  const finish = drawnPoints[drawnPoints.length - 1];
+  const loopClosurePenaltyM = isCircular
+    ? haversineDistanceM(routePolyline[routePolyline.length - 1], routePolyline[0]) * 1.2
+    : haversineDistanceM(routePolyline[routePolyline.length - 1], finish) * 0.4;
+
+  return distanceErrorM * 0.85 + averageDistanceM * 3.2 + maxDistanceM * 0.95 + loopClosurePenaltyM;
+}
+
 function makeDrawAttemptKey(points: LngLat[]): string {
   return points
     .map((point) => `${point[0].toFixed(5)},${point[1].toFixed(5)}`)
@@ -586,15 +749,21 @@ async function generateDrawnRouteCandidates({
     getPolylineLengthM(drawnPoints),
     haversineDistanceM(start, finish)
   );
-  const attempts = getDrawRouteAttempts(drawnPoints);
+  const isCircular = isLikelyCircularDrawnRoute(drawnPoints);
+  const attempts = isCircular
+    ? getLoopWaypointAttempts(drawnPoints)
+    : getDrawRouteAttempts(drawnPoints);
   const seenRoutes = new Set<string>();
-  const candidates: AutoLoopCourseCandidate[] = [];
+  const scoredCandidates: Array<{
+    candidate: AutoLoopCourseCandidate;
+    score: number;
+  }> = [];
 
   for (const attempt of attempts) {
     throwIfCourseSearchAborted(signal);
 
     try {
-      const alternatives = attempt.length === 2;
+      const alternatives = !isCircular && attempt.length === 2;
       const routes = await fetchWalkingRouteVariants(
         attempt,
         token,
@@ -609,19 +778,30 @@ async function generateDrawnRouteCandidates({
         seenRoutes.add(key);
 
         const distanceErrorM = Math.abs(route.distanceM - drawnDistanceM);
-
-        candidates.push({
-          id: `draw-route-candidate-${candidates.length + 1}`,
-          candidateId: `draw-route-candidate-${candidates.length + 1}`,
-          name: `그리기 후보 ${candidates.length + 1}`,
-          distanceM: route.distanceM,
+        const score = calculateDrawRouteShapeScore({
+          routePolyline: route.polyline,
+          drawnPoints,
           distanceErrorM,
-          isWithinTolerance: distanceErrorM <= Math.max(350, drawnDistanceM * 0.25),
-          bearingDeg: 0,
-          endpoint: finish,
-          straightDistanceM: haversineDistanceM(start, finish),
-          outboundDistanceM: route.distanceM,
-          polyline: route.polyline,
+          isCircular,
+        });
+
+        scoredCandidates.push({
+          candidate: {
+            id: `draw-route-candidate-${scoredCandidates.length + 1}`,
+            candidateId: `draw-route-candidate-${scoredCandidates.length + 1}`,
+            name: `${isCircular ? "원형" : "그리기"} 후보 ${scoredCandidates.length + 1}`,
+            distanceM: route.distanceM,
+            distanceErrorM,
+            isWithinTolerance: isCircular
+              ? score <= Math.max(520, drawnDistanceM * 0.42)
+              : distanceErrorM <= Math.max(350, drawnDistanceM * 0.25),
+            bearingDeg: 0,
+            endpoint: isCircular ? start : finish,
+            straightDistanceM: haversineDistanceM(start, finish),
+            outboundDistanceM: route.distanceM,
+            polyline: route.polyline,
+          },
+          score,
         });
       });
     } catch (error) {
@@ -636,20 +816,20 @@ async function generateDrawnRouteCandidates({
     }
   }
 
-  return candidates
+  return scoredCandidates
     .sort((a, b) => {
-      if (a.isWithinTolerance !== b.isWithinTolerance) {
-        return a.isWithinTolerance ? -1 : 1;
+      if (a.candidate.isWithinTolerance !== b.candidate.isWithinTolerance) {
+        return a.candidate.isWithinTolerance ? -1 : 1;
       }
 
-      return a.distanceErrorM - b.distanceErrorM;
+      return a.score - b.score;
     })
     .slice(0, MAX_ONE_WAY_CANDIDATES_TO_RETURN)
-    .map((candidate, index) => ({
+    .map(({ candidate }, index) => ({
       ...candidate,
       id: `draw-route-candidate-${index + 1}`,
       candidateId: `draw-route-candidate-${index + 1}`,
-      name: `그리기 후보 ${index + 1}`,
+      name: `${isCircular ? "원형" : "그리기"} 후보 ${index + 1}`,
     }));
 }
 
@@ -3724,10 +3904,14 @@ export default function RaceMap() {
     const around = getLngLatFromClientPoint(midpointClientX, midpointClientY);
 
     if (around) {
-      map.zoomTo(nextZoom, {
+      const zoomOptions: mapboxgl.AnimationOptions & {
+        around: mapboxgl.LngLatLike;
+      } = {
         around,
         duration: 0,
-      });
+      };
+
+      map.zoomTo(nextZoom, zoomOptions);
     } else {
       map.zoomTo(nextZoom, { duration: 0 });
     }
@@ -3866,6 +4050,9 @@ export default function RaceMap() {
       return;
     }
 
+    const isCircularSketch = isLikelyCircularDrawnRoute(routeDrawnPoints);
+    const drawCandidateLabel = isCircularSketch ? "원형" : "그리기";
+
     const { runId, signal } = beginCourseSearch();
 
     try {
@@ -3873,7 +4060,11 @@ export default function RaceMap() {
       setDrawRouteError(null);
       setCandidateMode("oneWay");
       clearAutoLoopCandidates();
-      setStatus("그린 선을 따라갈 수 있는 보행 코스 후보를 찾는 중...");
+      setStatus(
+        isCircularSketch
+          ? "원형으로 그린 선을 둘러가는 보행 코스 후보를 찾는 중..."
+          : "그린 선을 따라갈 수 있는 보행 코스 후보를 찾는 중..."
+      );
 
       const candidates = await generateDrawnRouteCandidates({
         drawnPoints: routeDrawnPoints,
@@ -3886,8 +4077,12 @@ export default function RaceMap() {
       }
 
       if (candidates.length === 0) {
-        setDrawRouteError("그린 방향을 따라갈 수 있는 보행 코스 후보를 찾지 못했습니다.");
-        setStatus("그리기 후보 없음");
+        setDrawRouteError(
+          isCircularSketch
+            ? "원형으로 둘러가는 보행 코스 후보를 찾지 못했습니다."
+            : "그린 방향을 따라갈 수 있는 보행 코스 후보를 찾지 못했습니다."
+        );
+        setStatus(`${drawCandidateLabel} 후보 없음`);
         return;
       }
 
@@ -3897,7 +4092,7 @@ export default function RaceMap() {
       clearDrawRouteOverlay();
       setAutoLoopAllCandidates(candidates);
       showAutoLoopCandidatePage(candidates, 0, "oneWay");
-      setStatus(`그리기 후보 ${Math.min(candidates.length, AUTO_LOOP_PAGE_SIZE)}개 표시 중`);
+      setStatus(`${drawCandidateLabel} 후보 ${Math.min(candidates.length, AUTO_LOOP_PAGE_SIZE)}개 표시 중`);
     } catch (rawError) {
       if (isCourseSearchAbortError(rawError)) {
         if (isCurrentCourseSearch(runId, signal)) {
@@ -4430,7 +4625,16 @@ export default function RaceMap() {
 
   const isGeneratingAnyCourse =
     isGeneratingAutoLoop || isGeneratingOneWay || isGeneratingDrawRouteCandidates;
-  const candidateModeLabel = getCandidateModeLabel(candidateMode);
+  const isDrawnCandidatePanel =
+    autoLoopAllCandidates.some((candidate) =>
+      candidate.candidateId.startsWith("draw-route-candidate")
+    ) ||
+    autoLoopCandidates.some((candidate) =>
+      candidate.candidateId.startsWith("draw-route-candidate")
+    );
+  const candidateModeLabel = isDrawnCandidatePanel
+    ? "그리기"
+    : getCandidateModeLabel(candidateMode);
 
   const currentMapLocationText = currentMapLocation
     ? `${currentMapLocation[1].toFixed(5)}, ${currentMapLocation[0].toFixed(5)}`
@@ -6361,7 +6565,7 @@ export default function RaceMap() {
                   {formatDraftDistance(drawnRouteDistanceM)}
                 </div>
                 <div className="mt-1 text-[11px] font-semibold text-slate-500">
-                  1단계에서는 손가락으로 그린 선의 시작점·끝점과 중간 방향점을 참고해 가능한 보행 경로 후보를 생성합니다. 실제 후보는 Mapbox 보행 경로 기준으로 보정됩니다.
+                  원이 닫힌 형태로 그려지면 원형 코스 알고리즘을 우선 적용합니다. 시작점에서 출발해 그린 둘레의 4~6개 방향점을 순서대로 통과하고 다시 시작점으로 돌아오는 후보를 먼저 찾습니다.
                 </div>
               </div>
 
@@ -6370,7 +6574,7 @@ export default function RaceMap() {
                   사용 방법
                 </div>
                 <div className="mt-1 text-[11px] font-semibold leading-relaxed text-slate-600">
-                  지도 위 빈 곳을 누른 채 원하는 방향으로 쭉 그리세요. 지도 이동이 필요하면 지도 이동 모드로 전환하고, 확대/축소는 그리기 모드에서도 두 손가락으로 할 수 있습니다.
+                  원형으로 둘러 달리고 싶으면 시작점 근처로 다시 돌아오게 닫힌 선을 그리세요. 지도 이동이 필요하면 지도 이동 모드로 전환하고, 확대/축소는 그리기 모드에서도 두 손가락으로 할 수 있습니다.
                 </div>
               </div>
 
