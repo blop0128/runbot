@@ -6015,6 +6015,165 @@ export default function RaceMap() {
             0 8px 20px rgba(15, 23, 42, 0.10) !important;
         }
 
+
+        /* Final main-screen material direction: dark hero + warm ivory content cards */
+        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card),
+        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) {
+          border-color: rgba(255, 255, 255, 0.46) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.38),
+              rgba(255, 250, 240, 0.20)
+            ) !important;
+          color: #0f172a !important;
+          backdrop-filter: blur(26px) saturate(150%);
+          -webkit-backdrop-filter: blur(26px) saturate(150%);
+          box-shadow:
+            0 18px 46px rgba(15, 23, 42, 0.18),
+            inset 0 1px 0 rgba(255, 255, 255, 0.58),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.16) !important;
+        }
+
+        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card)::before,
+        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card)::before {
+          background:
+            radial-gradient(
+              circle at 18% 0%,
+              rgba(255, 255, 255, 0.30),
+              transparent 40%
+            ),
+            linear-gradient(
+              180deg,
+              rgba(255, 255, 255, 0.24),
+              transparent 46%
+            ) !important;
+        }
+
+        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card) .text-slate-950,
+        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card) .text-slate-900,
+        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card) .text-slate-800,
+        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card) .text-slate-700,
+        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) .text-slate-950,
+        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) .text-slate-900,
+        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) .text-slate-800,
+        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) .text-slate-700 {
+          color: #0f172a !important;
+        }
+
+        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card) .text-slate-600,
+        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card) .text-slate-500,
+        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card) .text-slate-400,
+        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) .text-slate-600,
+        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) .text-slate-500,
+        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) .text-slate-400 {
+          color: rgba(51, 65, 85, 0.78) !important;
+        }
+
+        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card) .text-blue-700,
+        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) .text-blue-700 {
+          color: #1d4ed8 !important;
+        }
+
+        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card) .text-orange-700,
+        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) .text-orange-700 {
+          color: #c2410c !important;
+        }
+
+        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card) .text-emerald-700,
+        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) .text-emerald-700 {
+          color: #047857 !important;
+        }
+
+        .race-setup-panel div.rounded-xl.border:not(.hero-glass-card) .text-red-700,
+        .race-setup-panel div.rounded-lg.border:not(.hero-glass-card) .text-red-700 {
+          color: #b91c1c !important;
+        }
+
+        /* Light ivory glass for inner information boxes on the setup screen */
+        .race-setup-panel div.bg-white,
+        .race-setup-panel div.bg-slate-50,
+        .race-setup-panel div.bg-slate-100,
+        .race-setup-panel div.bg-blue-50,
+        .race-setup-panel div.bg-indigo-50,
+        .race-setup-panel div.bg-purple-50,
+        .race-setup-panel div.bg-violet-50,
+        .race-setup-panel div.bg-emerald-50,
+        .race-setup-panel div.bg-green-50,
+        .race-setup-panel div.bg-orange-50,
+        .race-setup-panel div.bg-yellow-50,
+        .race-setup-panel div.bg-red-50 {
+          border: 1px solid rgba(255, 255, 255, 0.34) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.26),
+              rgba(255, 250, 240, 0.12)
+            ) !important;
+          color: #0f172a !important;
+          backdrop-filter: blur(22px) saturate(145%);
+          -webkit-backdrop-filter: blur(22px) saturate(145%);
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.42),
+            0 10px 26px rgba(15, 23, 42, 0.10) !important;
+        }
+
+        .race-setup-panel input {
+          border-color: rgba(255, 255, 255, 0.48) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.34),
+              rgba(255, 250, 240, 0.16)
+            ) !important;
+          color: #0f172a !important;
+          backdrop-filter: blur(22px) saturate(145%);
+          -webkit-backdrop-filter: blur(22px) saturate(145%);
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.46),
+            0 10px 24px rgba(15, 23, 42, 0.10) !important;
+        }
+
+        .race-setup-panel input::placeholder {
+          color: rgba(51, 65, 85, 0.70) !important;
+        }
+
+        /* Keep quick distance and secondary controls bright; keep primary course CTAs dark */
+        .race-setup-panel button.bg-white,
+        .race-setup-panel button.bg-slate-100,
+        .race-setup-panel button[class*="bg-white/"],
+        .race-setup-panel button[class*="border-dashed"] {
+          border: 1px solid rgba(255, 255, 255, 0.44) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.32),
+              rgba(255, 250, 240, 0.14)
+            ) !important;
+          color: #0f172a !important;
+          backdrop-filter: blur(22px) saturate(145%);
+          -webkit-backdrop-filter: blur(22px) saturate(145%);
+          box-shadow:
+            0 12px 28px rgba(15, 23, 42, 0.14),
+            inset 0 1px 0 rgba(255, 255, 255, 0.48) !important;
+        }
+
+        .race-setup-panel button:disabled {
+          border-color: rgba(255, 255, 255, 0.30) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(226, 232, 240, 0.34),
+              rgba(255, 255, 255, 0.12)
+            ) !important;
+          color: rgba(71, 85, 105, 0.58) !important;
+          backdrop-filter: blur(18px) saturate(125%);
+          -webkit-backdrop-filter: blur(18px) saturate(125%);
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.30),
+            0 8px 20px rgba(15, 23, 42, 0.08) !important;
+        }
+
       `}</style>
     </div>
   );
