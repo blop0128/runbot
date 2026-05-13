@@ -57,6 +57,8 @@ type SavedCourseRecord = Course & {
 
 const INITIAL_SELECTED_BOT_IDS = ["bot_600", "bot_500", "bot_400"];
 const SAVED_COURSES_STORAGE_KEY = "runbot:savedCourses:v1";
+const AUTO_LOOP_PAGE_SIZE = 5;
+const AUTO_LOOP_COLORS = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#3b82f6"];
 
 const DEFAULT_COURSE: Course = {
   id: HAN_RIVER_YEOUIDO_5K.id,
@@ -191,6 +193,41 @@ function makeCourseGeoJson(course: Course) {
   } as const;
 }
 
+function makeAutoLoopCandidateGeoJson(candidates: AutoLoopCourseCandidate[]) {
+  return {
+    type: "FeatureCollection",
+    features: candidates.map((candidate, index) => ({
+      type: "Feature",
+      properties: {
+        candidateId: candidate.candidateId,
+        candidateIndex: index,
+      },
+      geometry: {
+        type: "LineString",
+        coordinates: candidate.polyline,
+      },
+    })),
+  } as GeoJSON.FeatureCollection<GeoJSON.LineString>;
+}
+
+function getAutoLoopCandidateColor(index: number): string {
+  return AUTO_LOOP_COLORS[index % AUTO_LOOP_COLORS.length];
+}
+
+function getAutoLoopLineColorExpression(
+  candidates: AutoLoopCourseCandidate[]
+): unknown[] {
+  const expression: unknown[] = ["match", ["get", "candidateId"]];
+
+  candidates.forEach((candidate, index) => {
+    expression.push(candidate.candidateId, getAutoLoopCandidateColor(index));
+  });
+
+  expression.push("#334155");
+
+  return expression;
+}
+
 function formatPoint(point: LngLat | null): string {
   if (!point) return "미선택";
   return `${point[1].toFixed(5)}, ${point[0].toFixed(5)}`;
@@ -221,26 +258,11 @@ function getNextRequiredStep(points: CustomCoursePoints): CustomPointStep {
 }
 
 function getCustomGuideText(guide: CustomGuide): string {
-  if (guide === "select-start") {
-    return "지도를 눌러 시작점을 선택하십시오.";
-  }
-
-  if (guide === "add-turnaround") {
-    return "반환점을 추가하려면 반환점 추가 버튼을 누르십시오.";
-  }
-
-  if (guide === "select-turnaround") {
-    return "지도를 눌러 반환점을 선택하십시오.";
-  }
-
-  if (guide === "select-finish") {
-    return "지도를 눌러 종료 지점을 선택하십시오.";
-  }
-
-  if (guide === "build-course") {
-    return "코스 생성 버튼을 눌러 코스를 생성하십시오.";
-  }
-
+  if (guide === "select-start") return "지도를 눌러 시작점을 선택하십시오.";
+  if (guide === "add-turnaround") return "반환점을 추가하려면 반환점 추가 버튼을 누르십시오.";
+  if (guide === "select-turnaround") return "지도를 눌러 반환점을 선택하십시오.";
+  if (guide === "select-finish") return "지도를 눌러 종료 지점을 선택하십시오.";
+  if (guide === "build-course") return "코스 생성 버튼을 눌러 코스를 생성하십시오.";
   return "";
 }
 
@@ -285,14 +307,8 @@ function createCustomPointMarkerElement(type: CustomPointStep) {
 
 function getSortedSavedCourses(courses: SavedCourseRecord[]): SavedCourseRecord[] {
   return [...courses].sort((a, b) => {
-    if (a.favorite !== b.favorite) {
-      return a.favorite ? -1 : 1;
-    }
-
-    if (a.order !== b.order) {
-      return a.order - b.order;
-    }
-
+    if (a.favorite !== b.favorite) return a.favorite ? -1 : 1;
+    if (a.order !== b.order) return a.order - b.order;
     return b.createdAt - a.createdAt;
   });
 }
@@ -374,9 +390,13 @@ export default function RaceMap() {
     useState(false);
   const [isGeneratingAutoLoop, setIsGeneratingAutoLoop] = useState(false);
   const [autoLoopTargetKm, setAutoLoopTargetKm] = useState("3.0");
+  const [autoLoopAllCandidates, setAutoLoopAllCandidates] = useState<
+    AutoLoopCourseCandidate[]
+  >([]);
   const [autoLoopCandidates, setAutoLoopCandidates] = useState<
     AutoLoopCourseCandidate[]
   >([]);
+  const [autoLoopCandidateCursor, setAutoLoopCandidateCursor] = useState(0);
   const [autoLoopError, setAutoLoopError] = useState<string | null>(null);
 
   const [isRunning, setIsRunning] = useState(false);
@@ -431,6 +451,16 @@ export default function RaceMap() {
     Boolean(customPoints.finish) &&
     !isGeneratingCustomCourse;
 
+  const isAutoLoopPanelVisible =
+    isGeneratingAutoLoop ||
+    autoLoopCandidates.length > 0 ||
+    autoLoopError !== null;
+
+  const autoLoopRemainingCount = Math.max(
+    autoLoopAllCandidates.length - autoLoopCandidateCursor,
+    0
+  );
+
   function createInitialHud(): RunnerHudState[] {
     return [
       {
@@ -463,6 +493,22 @@ export default function RaceMap() {
 
     map.fitBounds(bounds, {
       padding: 80,
+      duration: 800,
+    });
+  }
+
+  function fitMapToAutoLoopCandidates(candidates: AutoLoopCourseCandidate[]) {
+    const map = mapRef.current;
+    if (!map || candidates.length === 0) return;
+
+    const bounds = new mapboxgl.LngLatBounds();
+
+    candidates.forEach((candidate) => {
+      candidate.polyline.forEach((coord) => bounds.extend(coord));
+    });
+
+    map.fitBounds(bounds, {
+      padding: 90,
       duration: 800,
     });
   }
@@ -500,6 +546,99 @@ export default function RaceMap() {
         "line-color": "#2563eb",
       },
     });
+  }
+
+  function updateAutoLoopCandidateOverlay(
+    candidates: AutoLoopCourseCandidate[]
+  ) {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const data = makeAutoLoopCandidateGeoJson(candidates);
+
+    const source = map.getSource("auto-loop-candidates") as
+      | mapboxgl.GeoJSONSource
+      | undefined;
+
+    if (source) {
+      source.setData(data);
+    } else {
+      map.addSource("auto-loop-candidates", {
+        type: "geojson",
+        data,
+      });
+    }
+
+    if (!map.getLayer("auto-loop-candidates-line")) {
+      map.addLayer({
+        id: "auto-loop-candidates-line",
+        type: "line",
+        source: "auto-loop-candidates",
+        layout: {
+          "line-join": "round",
+          "line-cap": "round",
+        },
+        paint: {
+          "line-width": 5,
+          "line-opacity": 0.82,
+          "line-color": getAutoLoopLineColorExpression(candidates) as never,
+        },
+      });
+    } else {
+      map.setPaintProperty(
+        "auto-loop-candidates-line",
+        "line-color",
+        getAutoLoopLineColorExpression(candidates) as never
+      );
+    }
+  }
+
+  function clearAutoLoopCandidateOverlay() {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const source = map.getSource("auto-loop-candidates") as
+      | mapboxgl.GeoJSONSource
+      | undefined;
+
+    if (source) {
+      source.setData(makeAutoLoopCandidateGeoJson([]));
+    }
+  }
+
+  function clearAutoLoopCandidates() {
+    setAutoLoopAllCandidates([]);
+    setAutoLoopCandidates([]);
+    setAutoLoopCandidateCursor(0);
+    setAutoLoopError(null);
+    clearAutoLoopCandidateOverlay();
+  }
+
+  function showAutoLoopCandidatePage(
+    allCandidates: AutoLoopCourseCandidate[],
+    startIndex: number
+  ) {
+    const nextCandidates = allCandidates.slice(
+      startIndex,
+      startIndex + AUTO_LOOP_PAGE_SIZE
+    );
+
+    setAutoLoopCandidates(nextCandidates);
+    setAutoLoopCandidateCursor(startIndex + nextCandidates.length);
+
+    updateAutoLoopCandidateOverlay(nextCandidates);
+    fitMapToAutoLoopCandidates(nextCandidates);
+
+    if (nextCandidates.length === 0) {
+      setStatus("더 이상 표시할 자동 루프 후보가 없습니다.");
+      return;
+    }
+
+    setStatus(
+      `자동 루프 후보 ${startIndex + 1}~${
+        startIndex + nextCandidates.length
+      } / ${allCandidates.length} 표시 중`
+    );
   }
 
   function resetMarkersToCourseStart(course: Course) {
@@ -668,6 +807,7 @@ export default function RaceMap() {
     gpsTracker.stop();
     latestGpsProjectionRef.current = null;
     clearCustomPointMarkers();
+    clearAutoLoopCandidates();
 
     setIsCustomCourseMode(false);
     setCustomGuide(null);
@@ -780,7 +920,13 @@ export default function RaceMap() {
     setAutoLoopError(null);
     setGpsActionError(null);
     setCustomCourseError(null);
+    setAutoLoopAllCandidates([]);
     setAutoLoopCandidates([]);
+    setAutoLoopCandidateCursor(0);
+    clearAutoLoopCandidateOverlay();
+
+    setActivePanel("map");
+    setSetupView("main");
 
     if (isSecureContextState === false) {
       setAutoLoopError("자동 루프 코스 생성은 HTTPS 환경에서 테스트해야 합니다.");
@@ -849,21 +995,8 @@ export default function RaceMap() {
         return;
       }
 
-      setAutoLoopCandidates(candidates);
-
-      const hasWithinTolerance = candidates.some(
-        (candidate) => candidate.isWithinTolerance
-      );
-
-      if (hasWithinTolerance) {
-        setStatus(
-          `±0.5km 안의 자동 루프 후보 ${candidates.length}개를 찾았습니다.`
-        );
-      } else {
-        setStatus(
-          "±0.5km 안의 후보가 없어 목표 거리와 가장 가까운 후보를 표시합니다."
-        );
-      }
+      setAutoLoopAllCandidates(candidates);
+      showAutoLoopCandidatePage(candidates, 0);
     } catch (rawError) {
       const message = getPositionErrorMessage(rawError);
 
@@ -872,6 +1005,17 @@ export default function RaceMap() {
     } finally {
       setIsGeneratingAutoLoop(false);
     }
+  }
+
+  function handleShowMoreAutoLoopCandidates() {
+    if (autoLoopAllCandidates.length === 0) return;
+
+    if (autoLoopCandidateCursor >= autoLoopAllCandidates.length) {
+      setStatus("더 이상 표시할 자동 루프 후보가 없습니다.");
+      return;
+    }
+
+    showAutoLoopCandidatePage(autoLoopAllCandidates, autoLoopCandidateCursor);
   }
 
   function handleApplyAutoLoopCandidate(candidate: AutoLoopCourseCandidate) {
@@ -885,6 +1029,7 @@ export default function RaceMap() {
     gpsTracker.stop();
     latestGpsProjectionRef.current = null;
     clearCustomPointMarkers();
+    clearAutoLoopCandidates();
 
     setIsCustomCourseMode(false);
     setCustomGuide(null);
@@ -893,13 +1038,16 @@ export default function RaceMap() {
     setActiveCourse(nextCourse);
     setActivePanel("map");
     setSetupView("main");
-    setAutoLoopError(null);
-    setAutoLoopCandidates([]);
     setStatus(
       `자동 루프 코스 적용 완료 · ${(candidate.distanceM / 1000).toFixed(
         2
       )}km`
     );
+  }
+
+  function handleCloseAutoLoopPanel() {
+    clearAutoLoopCandidates();
+    setStatus("자동 루프 후보 보기를 닫았습니다.");
   }
 
   useEffect(() => {
@@ -1136,7 +1284,7 @@ export default function RaceMap() {
     window.setTimeout(() => {
       mapRef.current?.resize();
     }, 120);
-  }, [activePanel, isLeaderboardOpen]);
+  }, [activePanel, isLeaderboardOpen, isAutoLoopPanelVisible]);
 
   useEffect(() => {
     Object.entries(botMarkerRefs.current).forEach(([botId, marker]) => {
@@ -1281,8 +1429,7 @@ export default function RaceMap() {
 
     setGpsActionError(null);
     setCustomCourseError(null);
-    setAutoLoopError(null);
-    setAutoLoopCandidates([]);
+    clearAutoLoopCandidates();
 
     if (isSecureContextState === false) {
       setGpsActionError("현재 위치 기준 코스 생성은 HTTPS 환경에서 테스트해야 합니다.");
@@ -1364,6 +1511,7 @@ export default function RaceMap() {
   function handleStartCustomCourseMode() {
     if (isRunning) return;
 
+    clearAutoLoopCandidates();
     setIsCustomCourseMode(true);
     setCustomPointStep("start");
     setCustomGuide("select-start");
@@ -1462,6 +1610,7 @@ export default function RaceMap() {
       gpsTracker.stop();
       latestGpsProjectionRef.current = null;
       clearCustomPointMarkers();
+      clearAutoLoopCandidates();
 
       if (!isOneTimeCustomCourse) {
         saveCustomCourse(nextCourse);
@@ -1506,6 +1655,7 @@ export default function RaceMap() {
       return;
     }
 
+    clearAutoLoopCandidates();
     resetMarkersToCourseStart(activeCourse);
 
     if (playerMode === "gps") {
@@ -1687,62 +1837,8 @@ export default function RaceMap() {
                   </div>
 
                   <div className="mt-2 text-[11px] text-slate-500">
-                    목표 거리 ±0.5km 안에 들어오는 루프 후보를 우선 표시합니다.
+                    후보 찾기를 누르면 지도 화면에서 5개씩 색상별 후보를 표시합니다.
                   </div>
-
-                  {autoLoopError && (
-                    <div className="mt-2 rounded-lg bg-red-50 p-2 text-xs text-red-700">
-                      {autoLoopError}
-                    </div>
-                  )}
-
-                  {autoLoopCandidates.length > 0 && (
-                    <div className="mt-2 space-y-2">
-                      {autoLoopCandidates.every(
-                        (candidate) => !candidate.isWithinTolerance
-                      ) && (
-                        <div className="rounded-lg bg-yellow-50 p-2 text-xs text-yellow-800">
-                          ±0.5km 안의 후보가 없어 목표 거리와 가장 가까운 후보를 표시합니다.
-                        </div>
-                      )}
-
-                      {autoLoopCandidates.map((candidate, index) => (
-                        <div
-                          key={candidate.candidateId}
-                          className={`rounded-lg border p-2 ${
-                            candidate.isWithinTolerance
-                              ? "border-emerald-200 bg-white"
-                              : "border-yellow-200 bg-yellow-50"
-                          }`}
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <div>
-                              <div className="text-sm font-semibold text-slate-900">
-                                후보 {index + 1}
-                              </div>
-                              <div className="text-xs text-slate-600">
-                                거리 {(candidate.distanceM / 1000).toFixed(2)}km · 오차{" "}
-                                {(candidate.distanceErrorM / 1000).toFixed(2)}km
-                              </div>
-                              <div className="text-[11px] text-slate-500">
-                                {candidate.isWithinTolerance
-                                  ? "허용 오차 안"
-                                  : "허용 오차 밖"}
-                              </div>
-                            </div>
-
-                            <button
-                              type="button"
-                              onClick={() => handleApplyAutoLoopCandidate(candidate)}
-                              className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white"
-                            >
-                              선택
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </div>
 
                 <div className="mt-3 grid grid-cols-1 gap-2">
@@ -2059,6 +2155,115 @@ export default function RaceMap() {
         </div>
       )}
 
+      {activePanel === "map" && isAutoLoopPanelVisible && !isCustomCourseMode && (
+        <div className="race-panel race-auto-loop-panel">
+          <div className="mb-2 flex items-start justify-between gap-3">
+            <div>
+              <div className="text-sm font-bold text-slate-900">
+                자동 루프 후보
+              </div>
+              <div className="text-xs text-slate-500">{status}</div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleCloseAutoLoopPanel}
+              className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700"
+            >
+              닫기
+            </button>
+          </div>
+
+          {isGeneratingAutoLoop && (
+            <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
+              현재 위치와 주변 보행 경로를 기준으로 후보를 탐색 중입니다.
+            </div>
+          )}
+
+          {autoLoopError && (
+            <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
+              {autoLoopError}
+            </div>
+          )}
+
+          {autoLoopCandidates.length > 0 && (
+            <div className="space-y-2">
+              <div className="rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
+                표시 중: {autoLoopCandidateCursor - autoLoopCandidates.length + 1}
+                ~{autoLoopCandidateCursor} / {autoLoopAllCandidates.length}개 ·
+                남은 후보 {autoLoopRemainingCount}개
+              </div>
+
+              {autoLoopCandidates.map((candidate, index) => (
+                <div
+                  key={candidate.candidateId}
+                  className={`rounded-lg border p-2 ${
+                    candidate.isWithinTolerance
+                      ? "border-emerald-200 bg-white"
+                      : "border-yellow-200 bg-yellow-50"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                        <span
+                          className="inline-block h-3 w-3 rounded-full"
+                          style={{
+                            backgroundColor: getAutoLoopCandidateColor(index),
+                          }}
+                        />
+                        {candidate.name}
+                      </div>
+
+                      <div className="mt-1 text-xs text-slate-600">
+                        거리 {(candidate.distanceM / 1000).toFixed(2)}km · 오차{" "}
+                        {(candidate.distanceErrorM / 1000).toFixed(2)}km
+                      </div>
+
+                      <div className="text-[11px] text-slate-500">
+                        {candidate.isWithinTolerance
+                          ? "허용 오차 ±0.5km 안"
+                          : "허용 오차 밖"}
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleApplyAutoLoopCandidate(candidate)}
+                      className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white"
+                    >
+                      선택
+                    </button>
+                  </div>
+                </div>
+              ))}
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={handleShowMoreAutoLoopCandidates}
+                  disabled={autoLoopRemainingCount <= 0}
+                  className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  후보 다시 찾기
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActivePanel("setup");
+                    setSetupView("main");
+                  }}
+                  className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700"
+                >
+                  설정으로
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {activePanel === "map" && isCustomCourseMode && (
         <div className="race-panel race-custom-panel">
           <div className="mb-2 flex items-start justify-between gap-3">
@@ -2188,7 +2393,7 @@ export default function RaceMap() {
         </div>
       )}
 
-      {activePanel === "map" && !isCustomCourseMode && (
+      {activePanel === "map" && !isCustomCourseMode && !isAutoLoopPanelVisible && (
         <div
           className={`race-panel race-map-hud ${
             isLeaderboardOpen ? "race-map-hud-open" : "race-map-hud-collapsed"
@@ -2407,7 +2612,8 @@ export default function RaceMap() {
         }
 
         .race-map-hud,
-        .race-custom-panel {
+        .race-custom-panel,
+        .race-auto-loop-panel {
           left: 10px;
           right: 10px;
           bottom: max(10px, env(safe-area-inset-bottom));
@@ -2428,6 +2634,10 @@ export default function RaceMap() {
 
         .race-custom-panel {
           max-height: min(62vh, 500px);
+        }
+
+        .race-auto-loop-panel {
+          max-height: min(62vh, 520px);
         }
 
         .race-runner-list {
@@ -2493,7 +2703,8 @@ export default function RaceMap() {
           }
 
           .race-map-hud,
-          .race-custom-panel {
+          .race-custom-panel,
+          .race-auto-loop-panel {
             top: calc(max(8px, env(safe-area-inset-top)) + 52px);
             bottom: 10px;
             left: 10px;
@@ -2504,7 +2715,8 @@ export default function RaceMap() {
           }
 
           .race-map-hud-open,
-          .race-custom-panel {
+          .race-custom-panel,
+          .race-auto-loop-panel {
             max-height: none;
           }
 
@@ -2540,7 +2752,8 @@ export default function RaceMap() {
           }
 
           .race-map-hud,
-          .race-custom-panel {
+          .race-custom-panel,
+          .race-auto-loop-panel {
             top: 72px;
             bottom: auto;
             left: 16px;
@@ -2551,7 +2764,8 @@ export default function RaceMap() {
           }
 
           .race-map-hud-open,
-          .race-custom-panel {
+          .race-custom-panel,
+          .race-auto-loop-panel {
             max-height: calc(100dvh - 88px);
           }
 
@@ -2571,7 +2785,8 @@ export default function RaceMap() {
           }
 
           .race-map-hud,
-          .race-custom-panel {
+          .race-custom-panel,
+          .race-auto-loop-panel {
             left: 8px;
             right: 8px;
             padding: 10px;

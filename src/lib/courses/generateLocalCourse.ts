@@ -191,9 +191,7 @@ async function fetchWalkingRouteThroughPoints(params: {
 }): Promise<{ coordinates: LngLat[]; distanceM: number } | null> {
   const { points, token } = params;
 
-  if (points.length < 2) {
-    return null;
-  }
+  if (points.length < 2) return null;
 
   const coordinateString = points
     .map(([lng, lat]) => `${lng},${lat}`)
@@ -365,9 +363,9 @@ export async function generateAutoLoopCourseCandidates(params: {
     throw new Error("목표 거리가 올바르지 않습니다.");
   }
 
-  const bearings = [0, 45, 90, 135, 180, 225, 270, 315];
-  const turnAngles = [80, 115];
-  const scaleFactors = [0.75, 0.9, 1.05, 1.2];
+  const bearings = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
+  const turnAngles = [70, 90, 110, 130, 150];
+  const scaleFactors = [0.7, 0.82, 0.94, 1.06, 1.18, 1.3];
 
   const candidates: AutoLoopCourseCandidate[] = [];
   const seen = new Set<string>();
@@ -422,19 +420,11 @@ export async function generateAutoLoopCourseCandidates(params: {
     }
   }
 
-  const sorted = candidates.sort((a, b) => {
+  return candidates.sort((a, b) => {
     if (a.isWithinTolerance !== b.isWithinTolerance) {
       return a.isWithinTolerance ? -1 : 1;
     }
 
     return a.distanceErrorM - b.distanceErrorM;
   });
-
-  const withinTolerance = sorted.filter((candidate) => candidate.isWithinTolerance);
-
-  if (withinTolerance.length > 0) {
-    return withinTolerance;
-  }
-
-  return sorted.slice(0, 5);
 }
