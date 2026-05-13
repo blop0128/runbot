@@ -6,7 +6,6 @@ import { HAN_RIVER_YEOUIDO_5K } from "@/lib/courses/hanRiver";
 import {
   generateAutoLoopCourseCandidates,
   generateCustomWalkingCourse,
-  generateLocalOutAndBackCourse,
   type AutoLoopCourseCandidate,
   type Course,
   type LngLat,
@@ -53,6 +52,32 @@ type SavedCourseRecord = Course & {
   order: number;
   createdAt: number;
   updatedAt: number;
+};
+
+type ElevationSummary =
+  | {
+      status: "loading";
+    }
+  | {
+      status: "unavailable";
+    }
+  | {
+      status: "ready";
+      minM: number;
+      maxM: number;
+      startM: number;
+      endM: number;
+      gainM: number;
+      lossM: number;
+      samples: number;
+    };
+
+type TerrainQueryableMap = mapboxgl.Map & {
+  setTerrain?: (terrain: { source: string; exaggeration?: number } | null) => void;
+  queryTerrainElevation?: (
+    lngLat: mapboxgl.LngLatLike,
+    options?: { exaggerated?: boolean }
+  ) => number | null;
 };
 
 const INITIAL_SELECTED_BOT_IDS = ["bot_600", "bot_500", "bot_400"];
@@ -193,39 +218,28 @@ function makeCourseGeoJson(course: Course) {
   } as const;
 }
 
-function makeAutoLoopCandidateGeoJson(candidates: AutoLoopCourseCandidate[]) {
+function makeAutoLoopCandidateGeoJson(candidate: AutoLoopCourseCandidate | null) {
   return {
     type: "FeatureCollection",
-    features: candidates.map((candidate, index) => ({
-      type: "Feature",
-      properties: {
-        candidateId: candidate.candidateId,
-        candidateIndex: index,
-      },
-      geometry: {
-        type: "LineString",
-        coordinates: candidate.polyline,
-      },
-    })),
+    features: candidate
+      ? [
+          {
+            type: "Feature",
+            properties: {
+              candidateId: candidate.candidateId,
+            },
+            geometry: {
+              type: "LineString",
+              coordinates: candidate.polyline,
+            },
+          },
+        ]
+      : [],
   } as GeoJSON.FeatureCollection<GeoJSON.LineString>;
 }
 
 function getAutoLoopCandidateColor(index: number): string {
   return AUTO_LOOP_COLORS[index % AUTO_LOOP_COLORS.length];
-}
-
-function getAutoLoopLineColorExpression(
-  candidates: AutoLoopCourseCandidate[]
-): unknown[] {
-  const expression: unknown[] = ["match", ["get", "candidateId"]];
-
-  candidates.forEach((candidate, index) => {
-    expression.push(candidate.candidateId, getAutoLoopCandidateColor(index));
-  });
-
-  expression.push("#334155");
-
-  return expression;
 }
 
 function formatPoint(point: LngLat | null): string {
@@ -356,6 +370,68 @@ function validateSavedCourseRecord(value: unknown): SavedCourseRecord | null {
   };
 }
 
+function getRouteSamplePoints(polyline: LngLat[], sampleCount: number): LngLat[] {
+  const distanceM = getPolylineLengthM(polyline);
+
+  if (polyline.length === 0) return [];
+  if (polyline.length === 1 || distanceM <= 0) return [polyline[0]];
+
+  const count = Math.max(sampleCount, 2);
+
+  return Array.from({ length: count }, (_, index) => {
+    const ratio = index / (count - 1);
+    return getLngLatAtDistance(polyline, distanceM * ratio);
+  });
+}
+
+function summarizeElevations(values: number[]): ElevationSummary {
+  const valid = values.filter((value) => Number.isFinite(value));
+
+  if (valid.length < 3) {
+    return { status: "unavailable" };
+  }
+
+  let gainM = 0;
+  let lossM = 0;
+
+  for (let i = 1; i < valid.length; i += 1) {
+    const delta = valid[i] - valid[i - 1];
+
+    if (Math.abs(delta) < 1) continue;
+
+    if (delta > 0) {
+      gainM += delta;
+    } else {
+      lossM += Math.abs(delta);
+    }
+  }
+
+  return {
+    status: "ready",
+    minM: Math.min(...valid),
+    maxM: Math.max(...valid),
+    startM: valid[0],
+    endM: valid[valid.length - 1],
+    gainM,
+    lossM,
+    samples: valid.length,
+  };
+}
+
+function formatElevationSummary(summary: ElevationSummary | undefined): string {
+  if (!summary || summary.status === "loading") {
+    return "고도 계산 중...";
+  }
+
+  if (summary.status === "unavailable") {
+    return "고도 정보 부족";
+  }
+
+  return `상승 +${Math.round(summary.gainM)}m · 하강 -${Math.round(
+    summary.lossM
+  )}m · 고도 ${Math.round(summary.minM)}~${Math.round(summary.maxM)}m`;
+}
+
 export default function RaceMap() {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -371,6 +447,7 @@ export default function RaceMap() {
   const animationFrameRef = useRef<number | null>(null);
   const lastHudUpdateRef = useRef<number>(0);
   const latestGpsProjectionRef = useRef<LatestGpsProjection | null>(null);
+  const elevationRunIdRef = useRef(0);
 
   const [activePanel, setActivePanel] = useState<ActivePanel>("setup");
   const [setupView, setSetupView] = useState<SetupView>("main");
@@ -385,7 +462,6 @@ export default function RaceMap() {
   const [gpsActionError, setGpsActionError] = useState<string | null>(null);
 
   const [isMapLoaded, setIsMapLoaded] = useState(false);
-  const [isGeneratingCourse, setIsGeneratingCourse] = useState(false);
   const [isGeneratingCustomCourse, setIsGeneratingCustomCourse] =
     useState(false);
   const [isGeneratingAutoLoop, setIsGeneratingAutoLoop] = useState(false);
@@ -397,6 +473,11 @@ export default function RaceMap() {
     AutoLoopCourseCandidate[]
   >([]);
   const [autoLoopCandidateCursor, setAutoLoopCandidateCursor] = useState(0);
+  const [autoLoopPreviewCandidateId, setAutoLoopPreviewCandidateId] =
+    useState<string | null>(null);
+  const [autoLoopElevationSummaries, setAutoLoopElevationSummaries] = useState<
+    Record<string, ElevationSummary>
+  >({});
   const [autoLoopError, setAutoLoopError] = useState<string | null>(null);
 
   const [isRunning, setIsRunning] = useState(false);
@@ -484,6 +565,24 @@ export default function RaceMap() {
     ];
   }
 
+  function enableTerrainElevationSource(map: mapboxgl.Map) {
+    const terrainMap = map as TerrainQueryableMap;
+
+    if (!map.getSource("mapbox-dem")) {
+      map.addSource("mapbox-dem", {
+        type: "raster-dem",
+        url: "mapbox://mapbox.mapbox-terrain-dem-v1",
+        tileSize: 512,
+        maxzoom: 14,
+      } as never);
+    }
+
+    terrainMap.setTerrain?.({
+      source: "mapbox-dem",
+      exaggeration: 1,
+    });
+  }
+
   function fitMapToCourse(course: Course) {
     const map = mapRef.current;
     if (!map || course.polyline.length === 0) return;
@@ -497,15 +596,13 @@ export default function RaceMap() {
     });
   }
 
-  function fitMapToAutoLoopCandidates(candidates: AutoLoopCourseCandidate[]) {
+  function fitMapToAutoLoopCandidate(candidate: AutoLoopCourseCandidate) {
     const map = mapRef.current;
-    if (!map || candidates.length === 0) return;
+    if (!map || candidate.polyline.length === 0) return;
 
     const bounds = new mapboxgl.LngLatBounds();
 
-    candidates.forEach((candidate) => {
-      candidate.polyline.forEach((coord) => bounds.extend(coord));
-    });
+    candidate.polyline.forEach((coord) => bounds.extend(coord));
 
     map.fitBounds(bounds, {
       padding: 90,
@@ -549,12 +646,13 @@ export default function RaceMap() {
   }
 
   function updateAutoLoopCandidateOverlay(
-    candidates: AutoLoopCourseCandidate[]
+    candidate: AutoLoopCourseCandidate | null,
+    color: string
   ) {
     const map = mapRef.current;
     if (!map) return;
 
-    const data = makeAutoLoopCandidateGeoJson(candidates);
+    const data = makeAutoLoopCandidateGeoJson(candidate);
 
     const source = map.getSource("auto-loop-candidates") as
       | mapboxgl.GeoJSONSource
@@ -579,17 +677,14 @@ export default function RaceMap() {
           "line-cap": "round",
         },
         paint: {
-          "line-width": 5,
-          "line-opacity": 0.82,
-          "line-color": getAutoLoopLineColorExpression(candidates) as never,
+          "line-width": 7,
+          "line-opacity": 0.88,
+          "line-color": color,
         },
       });
     } else {
-      map.setPaintProperty(
-        "auto-loop-candidates-line",
-        "line-color",
-        getAutoLoopLineColorExpression(candidates) as never
-      );
+      map.setPaintProperty("auto-loop-candidates-line", "line-color", color);
+      map.setPaintProperty("auto-loop-candidates-line", "line-opacity", 0.88);
     }
   }
 
@@ -602,16 +697,110 @@ export default function RaceMap() {
       | undefined;
 
     if (source) {
-      source.setData(makeAutoLoopCandidateGeoJson([]));
+      source.setData(makeAutoLoopCandidateGeoJson(null));
     }
   }
 
   function clearAutoLoopCandidates() {
+    elevationRunIdRef.current += 1;
     setAutoLoopAllCandidates([]);
     setAutoLoopCandidates([]);
     setAutoLoopCandidateCursor(0);
+    setAutoLoopPreviewCandidateId(null);
+    setAutoLoopElevationSummaries({});
     setAutoLoopError(null);
     clearAutoLoopCandidateOverlay();
+  }
+
+  function computeElevationSummariesForCandidates(
+    candidates: AutoLoopCourseCandidate[]
+  ) {
+    const map = mapRef.current as TerrainQueryableMap | null;
+
+    if (!map) return;
+
+    const runId = elevationRunIdRef.current + 1;
+    elevationRunIdRef.current = runId;
+
+    setAutoLoopElevationSummaries((current) => {
+      const next = { ...current };
+
+      candidates.forEach((candidate) => {
+        next[candidate.candidateId] = { status: "loading" };
+      });
+
+      return next;
+    });
+
+    let hasRun = false;
+
+    const run = () => {
+      if (hasRun) return;
+      hasRun = true;
+
+      if (elevationRunIdRef.current !== runId) return;
+
+      const queryMap = mapRef.current as TerrainQueryableMap | null;
+
+      if (!queryMap?.queryTerrainElevation) {
+        setAutoLoopElevationSummaries((current) => {
+          const next = { ...current };
+
+          candidates.forEach((candidate) => {
+            next[candidate.candidateId] = { status: "unavailable" };
+          });
+
+          return next;
+        });
+
+        return;
+      }
+
+      const nextSummaries: Record<string, ElevationSummary> = {};
+
+      candidates.forEach((candidate) => {
+        const samplePoints = getRouteSamplePoints(candidate.polyline, 36);
+        const elevations = samplePoints
+          .map((point) => {
+            const value = queryMap.queryTerrainElevation?.(point, {
+              exaggerated: false,
+            });
+
+            return typeof value === "number" ? value : NaN;
+          })
+          .filter((value) => Number.isFinite(value));
+
+        nextSummaries[candidate.candidateId] = summarizeElevations(elevations);
+      });
+
+      if (elevationRunIdRef.current !== runId) return;
+
+      setAutoLoopElevationSummaries((current) => ({
+        ...current,
+        ...nextSummaries,
+      }));
+    };
+
+    map.once("idle", () => {
+      window.setTimeout(run, 0);
+    });
+
+    window.setTimeout(run, 2200);
+  }
+
+  function previewAutoLoopCandidate(
+    candidate: AutoLoopCourseCandidate,
+    pageIndex: number,
+    shouldFit = true
+  ) {
+    const color = getAutoLoopCandidateColor(pageIndex);
+
+    setAutoLoopPreviewCandidateId(candidate.candidateId);
+    updateAutoLoopCandidateOverlay(candidate, color);
+
+    if (shouldFit) {
+      fitMapToAutoLoopCandidate(candidate);
+    }
   }
 
   function showAutoLoopCandidatePage(
@@ -626,13 +815,15 @@ export default function RaceMap() {
     setAutoLoopCandidates(nextCandidates);
     setAutoLoopCandidateCursor(startIndex + nextCandidates.length);
 
-    updateAutoLoopCandidateOverlay(nextCandidates);
-    fitMapToAutoLoopCandidates(nextCandidates);
-
     if (nextCandidates.length === 0) {
+      setAutoLoopPreviewCandidateId(null);
+      updateAutoLoopCandidateOverlay(null, "#3b82f6");
       setStatus("더 이상 표시할 자동 루프 후보가 없습니다.");
       return;
     }
+
+    previewAutoLoopCandidate(nextCandidates[0], 0, true);
+    computeElevationSummariesForCandidates(nextCandidates);
 
     setStatus(
       `자동 루프 후보 ${startIndex + 1}~${
@@ -923,6 +1114,8 @@ export default function RaceMap() {
     setAutoLoopAllCandidates([]);
     setAutoLoopCandidates([]);
     setAutoLoopCandidateCursor(0);
+    setAutoLoopPreviewCandidateId(null);
+    setAutoLoopElevationSummaries({});
     clearAutoLoopCandidateOverlay();
 
     setActivePanel("map");
@@ -1016,6 +1209,19 @@ export default function RaceMap() {
     }
 
     showAutoLoopCandidatePage(autoLoopAllCandidates, autoLoopCandidateCursor);
+  }
+
+  function handlePreviewAutoLoopCandidate(
+    candidate: AutoLoopCourseCandidate,
+    index: number
+  ) {
+    previewAutoLoopCandidate(candidate, index, true);
+
+    if (!autoLoopElevationSummaries[candidate.candidateId]) {
+      computeElevationSummariesForCandidates([candidate]);
+    }
+
+    setStatus(`${candidate.name} 미리보기 중`);
   }
 
   function handleApplyAutoLoopCandidate(candidate: AutoLoopCourseCandidate) {
@@ -1138,6 +1344,7 @@ export default function RaceMap() {
       setStatus("지도 로딩 완료");
       setIsMapLoaded(true);
 
+      enableTerrainElevationSource(map);
       updateCourseSource(DEFAULT_COURSE);
 
       const start = DEFAULT_COURSE.polyline[0];
@@ -1422,90 +1629,6 @@ export default function RaceMap() {
 
       return [...current, botId];
     });
-  }
-
-  async function handleGenerateCourseFromCurrentLocation() {
-    if (isRunning) return;
-
-    setGpsActionError(null);
-    setCustomCourseError(null);
-    clearAutoLoopCandidates();
-
-    if (isSecureContextState === false) {
-      setGpsActionError("현재 위치 기준 코스 생성은 HTTPS 환경에서 테스트해야 합니다.");
-      return;
-    }
-
-    const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
-
-    if (!token) {
-      setGpsActionError("Mapbox token이 없습니다.");
-      return;
-    }
-
-    try {
-      setIsGeneratingCourse(true);
-      setStatus("현재 위치를 가져오는 중...");
-
-      const position = await getCurrentPosition();
-
-      const accuracy = position.coords.accuracy;
-
-      if (accuracy > 120) {
-        setGpsActionError(
-          `현재 위치 정확도가 낮습니다. accuracy=${accuracy.toFixed(
-            1
-          )}m. 야외에서 다시 시도하세요.`
-        );
-        setStatus("현재 위치 정확도 부족");
-        return;
-      }
-
-      const origin: LngLat = [
-        position.coords.longitude,
-        position.coords.latitude,
-      ];
-
-      playerMarkerRef.current?.setLngLat(origin);
-      mapRef.current?.flyTo({
-        center: origin,
-        zoom: 16,
-        duration: 600,
-      });
-
-      setStatus("현재 위치 기준 코스를 생성하는 중...");
-
-      const nextCourse = await generateLocalOutAndBackCourse({
-        origin,
-        token,
-        targetDistanceM: 1000,
-      });
-
-      gpsTracker.stop();
-      latestGpsProjectionRef.current = null;
-      clearCustomPointMarkers();
-
-      setIsCustomCourseMode(false);
-      setCustomGuide(null);
-      setCustomPoints(INITIAL_CUSTOM_POINTS);
-      setPlayerMode("gps");
-      setActiveCourse(nextCourse);
-      setActivePanel("map");
-      setSetupView("main");
-      setGpsActionError(null);
-      setStatus(
-        `현재 위치 기준 코스 생성 완료 · ${(nextCourse.distanceM / 1000).toFixed(
-          2
-        )}km`
-      );
-    } catch (rawError) {
-      const message = getPositionErrorMessage(rawError);
-
-      setGpsActionError(message);
-      setStatus("현재 위치 기준 코스 생성 실패");
-    } finally {
-      setIsGeneratingCourse(false);
-    }
   }
 
   function handleStartCustomCourseMode() {
@@ -1837,22 +1960,11 @@ export default function RaceMap() {
                   </div>
 
                   <div className="mt-2 text-[11px] text-slate-500">
-                    후보 찾기를 누르면 지도 화면에서 5개씩 색상별 후보를 표시합니다.
+                    후보 찾기를 누르면 지도 화면에서 5개 후보를 하나씩 미리볼 수 있습니다.
                   </div>
                 </div>
 
                 <div className="mt-3 grid grid-cols-1 gap-2">
-                  <button
-                    type="button"
-                    onClick={handleGenerateCourseFromCurrentLocation}
-                    disabled={isRunning || isGeneratingCourse}
-                    className="rounded-lg bg-orange-600 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
-                  >
-                    {isGeneratingCourse
-                      ? "현재 위치 코스 생성 중..."
-                      : "현재 위치 기준 1K 코스 생성"}
-                  </button>
-
                   <button
                     type="button"
                     onClick={handleStartCustomCourseMode}
@@ -2194,49 +2306,80 @@ export default function RaceMap() {
                 남은 후보 {autoLoopRemainingCount}개
               </div>
 
-              {autoLoopCandidates.map((candidate, index) => (
-                <div
-                  key={candidate.candidateId}
-                  className={`rounded-lg border p-2 ${
-                    candidate.isWithinTolerance
-                      ? "border-emerald-200 bg-white"
-                      : "border-yellow-200 bg-yellow-50"
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                        <span
-                          className="inline-block h-3 w-3 rounded-full"
-                          style={{
-                            backgroundColor: getAutoLoopCandidateColor(index),
-                          }}
-                        />
-                        {candidate.name}
+              {autoLoopCandidates.map((candidate, index) => {
+                const isPreviewing =
+                  autoLoopPreviewCandidateId === candidate.candidateId;
+                const summary = autoLoopElevationSummaries[candidate.candidateId];
+
+                return (
+                  <div
+                    key={candidate.candidateId}
+                    className={`rounded-lg border p-2 ${
+                      isPreviewing
+                        ? "border-blue-300 bg-blue-50"
+                        : candidate.isWithinTolerance
+                          ? "border-emerald-200 bg-white"
+                          : "border-yellow-200 bg-yellow-50"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                          <span
+                            className="inline-block h-3 w-3 rounded-full"
+                            style={{
+                              backgroundColor: getAutoLoopCandidateColor(index),
+                            }}
+                          />
+                          {candidate.name}
+                          {isPreviewing && (
+                            <span className="rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-bold text-white">
+                              미리보기 중
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="mt-1 text-xs text-slate-600">
+                          거리 {(candidate.distanceM / 1000).toFixed(2)}km · 오차{" "}
+                          {(candidate.distanceErrorM / 1000).toFixed(2)}km
+                        </div>
+
+                        <div className="text-[11px] text-slate-500">
+                          {candidate.isWithinTolerance
+                            ? "허용 오차 ±0.5km 안"
+                            : "허용 오차 밖"}
+                        </div>
+
+                        <div className="mt-1 text-[11px] font-medium text-slate-700">
+                          {formatElevationSummary(summary)}
+                        </div>
                       </div>
 
-                      <div className="mt-1 text-xs text-slate-600">
-                        거리 {(candidate.distanceM / 1000).toFixed(2)}km · 오차{" "}
-                        {(candidate.distanceErrorM / 1000).toFixed(2)}km
-                      </div>
+                      <div className="flex shrink-0 flex-col gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handlePreviewAutoLoopCandidate(candidate, index)}
+                          className={`rounded-lg px-3 py-2 text-xs font-semibold ${
+                            isPreviewing
+                              ? "bg-blue-100 text-blue-700"
+                              : "bg-slate-100 text-slate-700"
+                          }`}
+                        >
+                          미리보기
+                        </button>
 
-                      <div className="text-[11px] text-slate-500">
-                        {candidate.isWithinTolerance
-                          ? "허용 오차 ±0.5km 안"
-                          : "허용 오차 밖"}
+                        <button
+                          type="button"
+                          onClick={() => handleApplyAutoLoopCandidate(candidate)}
+                          className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white"
+                        >
+                          선택
+                        </button>
                       </div>
                     </div>
-
-                    <button
-                      type="button"
-                      onClick={() => handleApplyAutoLoopCandidate(candidate)}
-                      className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white"
-                    >
-                      선택
-                    </button>
                   </div>
-                </div>
-              ))}
+                );
+              })}
 
               <div className="grid grid-cols-2 gap-2">
                 <button
@@ -2637,7 +2780,7 @@ export default function RaceMap() {
         }
 
         .race-auto-loop-panel {
-          max-height: min(62vh, 520px);
+          max-height: min(66vh, 560px);
         }
 
         .race-runner-list {
