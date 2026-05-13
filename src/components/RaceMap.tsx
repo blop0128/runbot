@@ -29,7 +29,7 @@ type ActivePanel = "setup" | "map";
 type SetupView = "main" | "myCourses";
 type CandidateMode = "outAndBack" | "oneWay";
 type CustomRouteMode = "oneWay" | "outAndBack";
-type BottomSheetKind = "candidate" | "mapHud" | "custom";
+type BottomSheetKind = "candidate" | "mapHud" | "custom" | "draw";
 type CustomPointStep = "start" | "turnaround" | "finish";
 type CustomGuide =
   | "select-start"
@@ -249,7 +249,11 @@ function removeConsecutiveDuplicatePoints(polyline: LngLat[]): LngLat[] {
   return result;
 }
 
-function makeDirectionsUrl(points: LngLat[], token: string): string {
+function makeDirectionsUrl(
+  points: LngLat[],
+  token: string,
+  alternatives = false
+): string {
   const coordinates = points
     .map((point) => `${point[0]},${point[1]}`)
     .join(";");
@@ -259,7 +263,7 @@ function makeDirectionsUrl(points: LngLat[], token: string): string {
     geometries: "geojson",
     overview: "full",
     steps: "false",
-    alternatives: "false",
+    alternatives: alternatives ? "true" : "false",
   });
 
   return `https://api.mapbox.com/directions/v5/${DIRECTIONS_PROFILE}/${coordinates}?${params.toString()}`;
@@ -287,6 +291,36 @@ async function fetchWalkingRoute(points: LngLat[], token: string): Promise<{
     distanceM: route.distance,
     polyline: removeConsecutiveDuplicatePoints(route.geometry.coordinates),
   };
+}
+
+async function fetchWalkingRouteVariants(
+  points: LngLat[],
+  token: string,
+  alternatives = false
+): Promise<
+  Array<{
+    distanceM: number;
+    polyline: LngLat[];
+  }>
+> {
+  const response = await fetch(makeDirectionsUrl(points, token, alternatives));
+
+  if (!response.ok) {
+    throw new Error(`Mapbox Directions 요청 실패: HTTP ${response.status}`);
+  }
+
+  const data = (await response.json()) as DirectionsResponse;
+
+  if (data.code !== "Ok" || !data.routes || data.routes.length === 0) {
+    throw new Error(data.message || "보행 경로를 찾지 못했습니다.");
+  }
+
+  return data.routes
+    .map((route) => ({
+      distanceM: route.distance,
+      polyline: removeConsecutiveDuplicatePoints(route.geometry.coordinates),
+    }))
+    .filter((route) => route.polyline.length >= 2 && route.distanceM > 0);
 }
 
 function getBearingCandidates(): number[] {
@@ -411,6 +445,158 @@ async function generateOneWayCourseCandidates({
       id: `one-way-candidate-${index + 1}`,
       candidateId: `one-way-candidate-${index + 1}`,
       name: `편도 후보 ${index + 1}`,
+    }));
+}
+
+function getDrawRouteWaypointSamples(points: LngLat[]): LngLat[] {
+  if (points.length <= 2) return points;
+
+  const lastIndex = points.length - 1;
+  const indexes = [
+    0,
+    Math.round(lastIndex * 0.33),
+    Math.round(lastIndex * 0.5),
+    Math.round(lastIndex * 0.67),
+    lastIndex,
+  ];
+
+  const uniqueIndexes = Array.from(new Set(indexes)).sort((a, b) => a - b);
+
+  return uniqueIndexes.map((index) => points[index]);
+}
+
+function makeDrawAttemptKey(points: LngLat[]): string {
+  return points
+    .map((point) => `${point[0].toFixed(5)},${point[1].toFixed(5)}`)
+    .join(";");
+}
+
+function makeDrawRouteCandidateKey(route: Pick<Course, "distanceM" | "polyline">): string {
+  const start = route.polyline[0];
+  const finish = route.polyline[route.polyline.length - 1];
+  const middle = route.polyline[Math.floor(route.polyline.length / 2)];
+
+  return [
+    Math.round(route.distanceM / 25),
+    start ? `${start[0].toFixed(4)},${start[1].toFixed(4)}` : "no-start",
+    middle ? `${middle[0].toFixed(4)},${middle[1].toFixed(4)}` : "no-middle",
+    finish ? `${finish[0].toFixed(4)},${finish[1].toFixed(4)}` : "no-finish",
+  ].join("|");
+}
+
+function getDrawRouteAttempts(points: LngLat[]): LngLat[][] {
+  if (points.length < 2) return [];
+
+  const start = points[0];
+  const finish = points[points.length - 1];
+  const lastIndex = points.length - 1;
+  const attempts: LngLat[][] = [[start, finish]];
+
+  if (points.length >= 4) {
+    attempts.push([start, points[Math.round(lastIndex * 0.5)], finish]);
+  }
+
+  if (points.length >= 7) {
+    attempts.push([
+      start,
+      points[Math.round(lastIndex * 0.33)],
+      points[Math.round(lastIndex * 0.67)],
+      finish,
+    ]);
+  }
+
+  if (points.length >= 10) {
+    attempts.push(getDrawRouteWaypointSamples(points));
+  }
+
+  const seen = new Set<string>();
+
+  return attempts
+    .map(removeConsecutiveDuplicatePoints)
+    .filter((attempt) => {
+      if (attempt.length < 2) return false;
+
+      const key = makeDrawAttemptKey(attempt);
+      if (seen.has(key)) return false;
+
+      seen.add(key);
+      return true;
+    });
+}
+
+async function generateDrawnRouteCandidates({
+  drawnPoints,
+  token,
+}: {
+  drawnPoints: LngLat[];
+  token: string;
+}): Promise<AutoLoopCourseCandidate[]> {
+  if (!token) {
+    throw new Error("Mapbox token이 없습니다.");
+  }
+
+  if (drawnPoints.length < 2) {
+    throw new Error("지도 위에 코스 방향을 먼저 그려주세요.");
+  }
+
+  const start = drawnPoints[0];
+  const finish = drawnPoints[drawnPoints.length - 1];
+  const drawnDistanceM = Math.max(
+    getPolylineLengthM(drawnPoints),
+    haversineDistanceM(start, finish)
+  );
+  const attempts = getDrawRouteAttempts(drawnPoints);
+  const seenRoutes = new Set<string>();
+  const candidates: AutoLoopCourseCandidate[] = [];
+
+  for (const attempt of attempts) {
+    try {
+      const alternatives = attempt.length === 2;
+      const routes = await fetchWalkingRouteVariants(attempt, token, alternatives);
+
+      routes.forEach((route) => {
+        const key = makeDrawRouteCandidateKey(route);
+        if (seenRoutes.has(key)) return;
+        seenRoutes.add(key);
+
+        const distanceErrorM = Math.abs(route.distanceM - drawnDistanceM);
+
+        candidates.push({
+          id: `draw-route-candidate-${candidates.length + 1}`,
+          candidateId: `draw-route-candidate-${candidates.length + 1}`,
+          name: `그리기 후보 ${candidates.length + 1}`,
+          distanceM: route.distanceM,
+          distanceErrorM,
+          isWithinTolerance: distanceErrorM <= Math.max(350, drawnDistanceM * 0.25),
+          bearingDeg: 0,
+          endpoint: finish,
+          straightDistanceM: haversineDistanceM(start, finish),
+          outboundDistanceM: route.distanceM,
+          polyline: route.polyline,
+        });
+      });
+    } catch (error) {
+      console.warn("Failed to generate drawn route candidate:", {
+        attempt,
+        error,
+      });
+    }
+  }
+
+  return candidates
+    .sort((a, b) => {
+      if (a.isWithinTolerance !== b.isWithinTolerance) {
+        return a.isWithinTolerance ? -1 : 1;
+      }
+
+      return a.distanceErrorM - b.distanceErrorM;
+    })
+    .slice(0, MAX_ONE_WAY_CANDIDATES_TO_RETURN)
+    .map((candidate, index) => ({
+      ...candidate,
+      id: `draw-route-candidate-${index + 1}`,
+      candidateId: `draw-route-candidate-${index + 1}`,
+      name: `그리기 후보 ${index + 1}`,
     }));
 }
 
@@ -1408,6 +1594,11 @@ export default function RaceMap() {
   const latestGpsProjectionRef = useRef<LatestGpsProjection | null>(null);
   const elevationRunIdRef = useRef(0);
   const completionRecordedForRunRef = useRef(false);
+  const drawRoutePointerRef = useRef<{
+    pointerId: number;
+    hasMoved: boolean;
+  } | null>(null);
+  const drawnRoutePointsRef = useRef<LngLat[]>([]);
   const bottomSheetDragRef = useRef<{
     sheet: BottomSheetKind;
     startY: number;
@@ -1426,6 +1617,7 @@ export default function RaceMap() {
     candidate: 0,
     mapHud: 0,
     custom: 0,
+    draw: 0,
   });
   const [draggingSheet, setDraggingSheet] = useState<BottomSheetKind | null>(
     null
@@ -1503,6 +1695,14 @@ export default function RaceMap() {
   const [customRouteMode, setCustomRouteMode] =
     useState<CustomRouteMode>("oneWay");
 
+  const [isDrawRouteMode, setIsDrawRouteMode] = useState(false);
+  const [isDrawPanelCollapsed, setIsDrawPanelCollapsed] = useState(false);
+  const [drawnRoutePoints, setDrawnRoutePoints] = useState<LngLat[]>([]);
+  const [isDrawingRoute, setIsDrawingRoute] = useState(false);
+  const [isGeneratingDrawRouteCandidates, setIsGeneratingDrawRouteCandidates] =
+    useState(false);
+  const [drawRouteError, setDrawRouteError] = useState<string | null>(null);
+
   const [runnerHud, setRunnerHud] = useState<RunnerHudState[]>([]);
   const [isSecureContextState, setIsSecureContextState] = useState<
     boolean | null
@@ -1558,6 +1758,11 @@ export default function RaceMap() {
   const customDraftDistanceM = useMemo(() => {
     return getCustomDraftDistanceM(customPoints, customRouteMode);
   }, [customPoints, customRouteMode]);
+
+  const drawnRouteDistanceM = useMemo(() => {
+    if (drawnRoutePoints.length < 2) return null;
+    return getPolylineLengthM(drawnRoutePoints);
+  }, [drawnRoutePoints]);
 
   const isAutoLoopPanelVisible =
     isGeneratingAutoLoop ||
@@ -3151,6 +3356,11 @@ export default function RaceMap() {
     if (isRunning) return;
 
     clearAutoLoopCandidates();
+    setIsDrawRouteMode(false);
+    setDrawnRoutePoints([]);
+    drawnRoutePointsRef.current = [];
+    setDrawRouteError(null);
+    clearDrawRouteOverlay();
     setIsCustomCourseMode(true);
     setCustomPointStep("start");
     setCustomGuide("select-start");
@@ -3176,6 +3386,273 @@ export default function RaceMap() {
     setCustomRouteMode("oneWay");
     clearCustomPointMarkers();
     setStatus("수동 코스 생성을 취소했습니다.");
+  }
+
+  function clearDrawRouteOverlay() {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const source = map.getSource("draw-route-draft") as
+      | mapboxgl.GeoJSONSource
+      | undefined;
+
+    if (source) {
+      source.setData({
+        type: "FeatureCollection",
+        features: [],
+      } as GeoJSON.FeatureCollection<GeoJSON.LineString>);
+    }
+  }
+
+  function updateDrawRouteOverlay(points: LngLat[]) {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const data = {
+      type: "FeatureCollection",
+      features:
+        points.length >= 2
+          ? [
+              {
+                type: "Feature",
+                properties: {},
+                geometry: {
+                  type: "LineString",
+                  coordinates: points,
+                },
+              },
+            ]
+          : [],
+    } as GeoJSON.FeatureCollection<GeoJSON.LineString>;
+
+    const source = map.getSource("draw-route-draft") as
+      | mapboxgl.GeoJSONSource
+      | undefined;
+
+    if (source) {
+      source.setData(data);
+      return;
+    }
+
+    map.addSource("draw-route-draft", {
+      type: "geojson",
+      data,
+    });
+
+    map.addLayer({
+      id: "draw-route-draft-line",
+      type: "line",
+      source: "draw-route-draft",
+      layout: {
+        "line-join": "round",
+        "line-cap": "round",
+      },
+      paint: {
+        "line-width": 6,
+        "line-color": "#0f172a",
+        "line-opacity": 0.82,
+        "line-blur": 0.5,
+      },
+    });
+  }
+
+  function getLngLatFromPointerEvent(event: PointerEvent<HTMLElement>): LngLat | null {
+    const map = mapRef.current;
+    const container = mapContainerRef.current;
+
+    if (!map || !container) return null;
+
+    const rect = container.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+
+    if (x < 0 || y < 0 || x > rect.width || y > rect.height) {
+      return null;
+    }
+
+    const point = map.unproject([x, y]);
+    return [point.lng, point.lat];
+  }
+
+  function appendDrawnRoutePoint(point: LngLat) {
+    setDrawnRoutePoints((current) => {
+      const last = current[current.length - 1];
+
+      if (last && haversineDistanceM(last, point) < 6) {
+        return current;
+      }
+
+      const next = [...current, point];
+      drawnRoutePointsRef.current = next;
+      updateDrawRouteOverlay(next);
+      return next;
+    });
+  }
+
+  function handleStartDrawRouteMode() {
+    if (isRunning) return;
+
+    clearAutoLoopCandidates();
+    clearCustomPointMarkers();
+    setIsCustomCourseMode(false);
+    setCustomGuide(null);
+    setCustomPoints(INITIAL_CUSTOM_POINTS);
+    setCustomCourseError(null);
+    setIsDrawRouteMode(true);
+    setIsDrawPanelCollapsed(false);
+    setDrawnRoutePoints([]);
+    drawnRoutePointsRef.current = [];
+    setDrawRouteError(null);
+    clearDrawRouteOverlay();
+    setIsLeaderboardOpen(false);
+    setActivePanel("map");
+    setSetupView("main");
+    setStatus("코스 그리기 모드: 지도 위를 손가락으로 그려 방향을 알려주세요.");
+  }
+
+  function handleCancelDrawRouteMode() {
+    setIsDrawRouteMode(false);
+    setIsDrawPanelCollapsed(false);
+    setDrawnRoutePoints([]);
+    drawnRoutePointsRef.current = [];
+    setDrawRouteError(null);
+    setIsDrawingRoute(false);
+    drawRoutePointerRef.current = null;
+    clearDrawRouteOverlay();
+    setStatus("코스 그리기 모드를 종료했습니다.");
+  }
+
+  function handleResetDrawRoute() {
+    setDrawnRoutePoints([]);
+    drawnRoutePointsRef.current = [];
+    setDrawRouteError(null);
+    setIsDrawingRoute(false);
+    drawRoutePointerRef.current = null;
+    clearDrawRouteOverlay();
+    setStatus("그린 선을 초기화했습니다. 다시 지도 위에 그려주세요.");
+  }
+
+  function handleDrawRoutePointerDown(event: PointerEvent<HTMLElement>) {
+    if (!isDrawRouteMode || isGeneratingDrawRouteCandidates) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+
+    const point = getLngLatFromPointerEvent(event);
+    if (!point) return;
+
+    event.preventDefault();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    drawRoutePointerRef.current = {
+      pointerId: event.pointerId,
+      hasMoved: false,
+    };
+
+    setDrawRouteError(null);
+    drawnRoutePointsRef.current = [point];
+    setDrawnRoutePoints([point]);
+    updateDrawRouteOverlay([point]);
+    setIsDrawingRoute(true);
+    setIsDrawPanelCollapsed(true);
+    setStatus("손가락을 떼면 그린 방향 기준 후보를 만들 수 있습니다.");
+  }
+
+  function handleDrawRoutePointerMove(event: PointerEvent<HTMLElement>) {
+    const draw = drawRoutePointerRef.current;
+    if (!draw || draw.pointerId !== event.pointerId) return;
+
+    const point = getLngLatFromPointerEvent(event);
+    if (!point) return;
+
+    event.preventDefault();
+    draw.hasMoved = true;
+    appendDrawnRoutePoint(point);
+  }
+
+  function handleDrawRoutePointerEnd(event: PointerEvent<HTMLElement>) {
+    const draw = drawRoutePointerRef.current;
+    if (!draw || draw.pointerId !== event.pointerId) return;
+
+    event.preventDefault();
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    drawRoutePointerRef.current = null;
+    setIsDrawingRoute(false);
+    setIsDrawPanelCollapsed(false);
+
+    if (!draw.hasMoved || drawnRoutePointsRef.current.length < 2) {
+      setDrawRouteError("너무 짧게 그렸습니다. 시작점에서 목표 방향까지 조금 더 길게 그려주세요.");
+      setStatus("코스 그리기 실패: 선이 너무 짧습니다.");
+      return;
+    }
+
+    setStatus("그린 선을 확인했습니다. 후보 찾기를 눌러 가능한 코스를 생성하세요.");
+  }
+
+  function handleDrawRoutePointerCancel(event: PointerEvent<HTMLElement>) {
+    const draw = drawRoutePointerRef.current;
+    if (draw && draw.pointerId === event.pointerId) {
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+    }
+
+    drawRoutePointerRef.current = null;
+    setIsDrawingRoute(false);
+    setIsDrawPanelCollapsed(false);
+  }
+
+  async function handleGenerateDrawnRouteCandidates() {
+    if (isRunning || isGeneratingDrawRouteCandidates) return;
+
+    const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+
+    if (!token) {
+      setDrawRouteError("Mapbox token이 없습니다.");
+      return;
+    }
+
+    const routeDrawnPoints =
+      drawnRoutePointsRef.current.length >= 2
+        ? drawnRoutePointsRef.current
+        : drawnRoutePoints;
+
+    if (routeDrawnPoints.length < 2) {
+      setDrawRouteError("지도 위에 코스 방향을 먼저 그려주세요.");
+      return;
+    }
+
+    try {
+      setIsGeneratingDrawRouteCandidates(true);
+      setDrawRouteError(null);
+      setCandidateMode("oneWay");
+      clearAutoLoopCandidates();
+      setStatus("그린 선을 따라갈 수 있는 보행 코스 후보를 찾는 중...");
+
+      const candidates = await generateDrawnRouteCandidates({
+        drawnPoints: routeDrawnPoints,
+        token,
+      });
+
+      if (candidates.length === 0) {
+        setDrawRouteError("그린 방향을 따라갈 수 있는 보행 코스 후보를 찾지 못했습니다.");
+        setStatus("그리기 후보 없음");
+        return;
+      }
+
+      setIsDrawRouteMode(false);
+      setIsDrawPanelCollapsed(false);
+      setDrawRouteError(null);
+      clearDrawRouteOverlay();
+      setAutoLoopAllCandidates(candidates);
+      showAutoLoopCandidatePage(candidates, 0, "oneWay");
+      setStatus(`그리기 후보 ${Math.min(candidates.length, AUTO_LOOP_PAGE_SIZE)}개 표시 중`);
+    } catch (rawError) {
+      const message =
+        rawError instanceof Error
+          ? rawError.message
+          : "그린 코스 후보를 생성하지 못했습니다.";
+
+      setDrawRouteError(message);
+      setStatus("그리기 후보 생성 실패");
+    } finally {
+      setIsGeneratingDrawRouteCandidates(false);
+    }
   }
 
   function handleAddTurnaroundPoint() {
@@ -3630,7 +4107,8 @@ export default function RaceMap() {
   const isGpsBlockedBySecurity =
     playerMode === "gps" && isSecureContextState === false;
 
-  const isGeneratingAnyCourse = isGeneratingAutoLoop || isGeneratingOneWay;
+  const isGeneratingAnyCourse =
+    isGeneratingAutoLoop || isGeneratingOneWay || isGeneratingDrawRouteCandidates;
   const candidateModeLabel = getCandidateModeLabel(candidateMode);
 
   const currentMapLocationText = currentMapLocation
@@ -3645,7 +4123,8 @@ export default function RaceMap() {
   function getBottomSheetCollapsedState(sheet: BottomSheetKind): boolean {
     if (sheet === "candidate") return isAutoLoopPanelCollapsed;
     if (sheet === "mapHud") return !isLeaderboardOpen;
-    return isCustomPanelCollapsed;
+    if (sheet === "custom") return isCustomPanelCollapsed;
+    return isDrawPanelCollapsed;
   }
 
   function setBottomSheetCollapsedState(
@@ -3662,7 +4141,12 @@ export default function RaceMap() {
       return;
     }
 
-    setIsCustomPanelCollapsed(shouldCollapse);
+    if (sheet === "custom") {
+      setIsCustomPanelCollapsed(shouldCollapse);
+      return;
+    }
+
+    setIsDrawPanelCollapsed(shouldCollapse);
   }
 
   function resetBottomSheetDragOffset(sheet: BottomSheetKind) {
@@ -4208,7 +4692,16 @@ export default function RaceMap() {
         activePanel === "map" && isCustomCourseMode && isCustomPanelCollapsed
           ? "race-root-custom-course-collapsed"
           : "",
-        activePanel === "map" && !isAutoLoopPanelVisible && !isCustomCourseMode
+        activePanel === "map" && isDrawRouteMode
+          ? "race-root-draw-open"
+          : "",
+        activePanel === "map" && isDrawRouteMode && isDrawPanelCollapsed
+          ? "race-root-draw-collapsed"
+          : "",
+        activePanel === "map" &&
+        !isAutoLoopPanelVisible &&
+        !isCustomCourseMode &&
+        !isDrawRouteMode
           ? "race-root-map-hud-open"
           : "",
       ]
@@ -4285,6 +4778,18 @@ export default function RaceMap() {
 
       {activePanel === "setup" && <div className="setup-background" />}
       <SetupLiquidShaderCanvas isActive={activePanel === "setup"} />
+
+      {activePanel === "map" && isDrawRouteMode && (
+        <div
+          className="draw-route-gesture-layer"
+          aria-label="지도 위에 코스 방향 그리기"
+          role="presentation"
+          onPointerDown={handleDrawRoutePointerDown}
+          onPointerMove={handleDrawRoutePointerMove}
+          onPointerUp={handleDrawRoutePointerEnd}
+          onPointerCancel={handleDrawRoutePointerCancel}
+        />
+      )}
 
       <div className="race-top-tabs">
         <button
@@ -4680,6 +5185,15 @@ export default function RaceMap() {
                     className="course-action-button course-action-primary px-3 py-2 text-sm disabled:cursor-not-allowed"
                   >
                     직접 코스 만들기
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleStartDrawRouteMode}
+                    disabled={isRunning || isGeneratingAnyCourse}
+                    className="course-action-button course-action-primary px-3 py-2 text-sm disabled:cursor-not-allowed"
+                  >
+                    지도에 그려서 코스 찾기
                   </button>
                 </div>
 
@@ -5409,7 +5923,113 @@ export default function RaceMap() {
         </section>
       )}
 
-      {activePanel === "map" && !isAutoLoopPanelVisible && !isCustomCourseMode && (
+      {activePanel === "map" && isDrawRouteMode && (
+        <section
+          className={`race-panel race-draw-bottom-sheet ${
+            isDrawPanelCollapsed ? "race-draw-panel-collapsed" : ""
+          }`}
+          aria-label="코스 그리기"
+          style={getBottomSheetDragStyle("draw")}
+        >
+          <div
+            className="candidate-bottom-sheet-handle bottom-sheet-drag-handle"
+            aria-hidden="true"
+            onPointerDown={(event) => handleBottomSheetDragStart("draw", event)}
+            onPointerMove={(event) => handleBottomSheetDragMove("draw", event)}
+            onPointerUp={(event) => handleBottomSheetDragEnd("draw", event)}
+            onPointerCancel={handleBottomSheetDragCancel}
+          />
+
+          <div className="draw-bottom-sheet-header">
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-black text-slate-900">
+                코스 그리기
+              </div>
+              <div className="truncate text-xs font-semibold text-slate-500">
+                {isDrawingRoute
+                  ? "그리고 있습니다. 손가락을 떼면 종료됩니다."
+                  : drawnRouteDistanceM
+                    ? `그린 길이 ${formatDraftDistance(drawnRouteDistanceM)}`
+                    : "지도 위를 손가락으로 그려 원하는 방향을 알려주세요."}
+              </div>
+            </div>
+
+            <div className="flex shrink-0 gap-1">
+              <button
+                type="button"
+                onClick={() => setIsDrawPanelCollapsed((value) => !value)}
+                className="candidate-sheet-control-button"
+              >
+                {isDrawPanelCollapsed ? "열기" : "접기"}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleCancelDrawRouteMode}
+                className="candidate-sheet-control-button"
+              >
+                취소
+              </button>
+            </div>
+          </div>
+
+          {!isDrawPanelCollapsed && (
+            <div className="draw-bottom-sheet-body">
+              <div className="draw-route-summary-card">
+                <div className="text-[11px] font-bold text-slate-500">
+                  그린 선 기준
+                </div>
+                <div className="mt-1 text-lg font-black text-slate-950">
+                  {formatDraftDistance(drawnRouteDistanceM)}
+                </div>
+                <div className="mt-1 text-[11px] font-semibold text-slate-500">
+                  1단계에서는 손가락으로 그린 선의 시작점·끝점과 중간 방향점을 참고해 가능한 보행 경로 후보를 생성합니다. 실제 후보는 Mapbox 보행 경로 기준으로 보정됩니다.
+                </div>
+              </div>
+
+              <div className="draw-route-guide-card">
+                <div className="text-xs font-black text-slate-900">
+                  사용 방법
+                </div>
+                <div className="mt-1 text-[11px] font-semibold leading-relaxed text-slate-600">
+                  지도 위 빈 곳을 누른 채 원하는 방향으로 쭉 그리세요. 지도 이동은 잠시 막히고, 후보 생성 후 다시 일반 지도 조작이 가능합니다.
+                </div>
+              </div>
+
+              {drawRouteError && (
+                <div className="mt-2 rounded-lg bg-red-50 p-2 text-xs font-bold text-red-700">
+                  {drawRouteError}
+                </div>
+              )}
+
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={handleResetDrawRoute}
+                  disabled={isGeneratingDrawRouteCandidates}
+                  className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  다시 그리기
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleGenerateDrawnRouteCandidates}
+                  disabled={drawnRoutePoints.length < 2 || isGeneratingDrawRouteCandidates}
+                  className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  {isGeneratingDrawRouteCandidates ? "후보 찾는 중..." : "후보 찾기"}
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
+      {activePanel === "map" &&
+        !isAutoLoopPanelVisible &&
+        !isCustomCourseMode &&
+        !isDrawRouteMode && (
         <section
           className={`race-panel race-map-hud race-map-bottom-sheet ${
             isLeaderboardOpen ? "race-map-hud-open" : "race-map-hud-collapsed"
@@ -8599,6 +9219,7 @@ export default function RaceMap() {
 
         .race-map-bottom-sheet,
         .race-custom-bottom-sheet,
+        .race-draw-bottom-sheet,
         .race-candidate-bottom-sheet {
           position: absolute !important;
           z-index: 45 !important;
@@ -8626,13 +9247,23 @@ export default function RaceMap() {
           max-height: min(72dvh, 620px) !important;
         }
 
+        .race-draw-bottom-sheet {
+          max-height: min(58dvh, 460px) !important;
+        }
+
         .race-custom-bottom-sheet.race-custom-panel-collapsed {
           max-height: none !important;
           height: auto !important;
         }
 
+        .race-draw-bottom-sheet.race-draw-panel-collapsed {
+          max-height: none !important;
+          height: auto !important;
+        }
+
         .map-bottom-sheet-header,
-        .custom-bottom-sheet-header {
+        .custom-bottom-sheet-header,
+        .draw-bottom-sheet-header {
           position: relative;
           z-index: 1;
           display: flex;
@@ -8654,6 +9285,7 @@ export default function RaceMap() {
 
         .map-bottom-sheet-body,
         .custom-bottom-sheet-body,
+        .draw-bottom-sheet-body,
         .candidate-bottom-sheet-body {
           position: relative;
           z-index: 1;
@@ -8667,7 +9299,13 @@ export default function RaceMap() {
           max-height: calc(min(58dvh, 480px) - 94px);
         }
 
-        .custom-distance-summary-card {
+        .draw-bottom-sheet-body {
+          max-height: calc(min(58dvh, 460px) - 94px);
+        }
+
+        .custom-distance-summary-card,
+        .draw-route-summary-card,
+        .draw-route-guide-card {
           border: 1px solid rgba(255, 255, 255, 0.62);
           border-radius: 18px;
           background:
@@ -8686,7 +9324,8 @@ export default function RaceMap() {
         }
 
         .race-map-bottom-sheet .candidate-bottom-sheet-handle,
-        .race-custom-bottom-sheet .candidate-bottom-sheet-handle {
+        .race-custom-bottom-sheet .candidate-bottom-sheet-handle,
+        .race-draw-bottom-sheet .candidate-bottom-sheet-handle {
           width: 46px;
           height: 5px;
           border-radius: 9999px;
@@ -8697,6 +9336,7 @@ export default function RaceMap() {
 
         .race-map-hud-collapsed .map-bottom-sheet-header,
         .race-custom-panel-collapsed .custom-bottom-sheet-header,
+        .race-draw-panel-collapsed .draw-bottom-sheet-header,
         .race-candidate-bottom-sheet-collapsed .candidate-bottom-sheet-header {
           min-height: 68px;
         }
@@ -8704,6 +9344,7 @@ export default function RaceMap() {
         @media (min-width: 768px) {
           .race-map-bottom-sheet,
           .race-custom-bottom-sheet,
+          .race-draw-bottom-sheet,
           .race-candidate-bottom-sheet {
             left: 50% !important;
             right: auto !important;
@@ -8713,6 +9354,7 @@ export default function RaceMap() {
 
           .race-map-bottom-sheet.race-map-hud-collapsed,
           .race-custom-bottom-sheet.race-custom-panel-collapsed,
+          .race-draw-bottom-sheet.race-draw-panel-collapsed,
           .race-candidate-bottom-sheet-collapsed {
             width: min(520px, calc(100vw - 32px)) !important;
           }
@@ -8721,6 +9363,7 @@ export default function RaceMap() {
         @media (orientation: landscape) and (max-height: 560px) {
           .race-map-bottom-sheet,
           .race-custom-bottom-sheet,
+          .race-draw-bottom-sheet,
           .race-candidate-bottom-sheet {
             top: auto !important;
             bottom: max(8px, env(safe-area-inset-bottom)) !important;
@@ -8734,13 +9377,15 @@ export default function RaceMap() {
 
         @media (max-width: 420px) {
           .map-bottom-sheet-header,
-          .custom-bottom-sheet-header {
+          .custom-bottom-sheet-header,
+          .draw-bottom-sheet-header {
             align-items: stretch;
             flex-direction: column;
           }
 
           .map-bottom-sheet-header > .flex,
-          .custom-bottom-sheet-header > .flex {
+          .custom-bottom-sheet-header > .flex,
+          .draw-bottom-sheet-header > .flex {
             display: grid;
             grid-template-columns: 1fr 1fr;
             width: 100%;
@@ -8753,6 +9398,7 @@ export default function RaceMap() {
            ========================================================= */
         .race-map-bottom-sheet,
         .race-custom-bottom-sheet,
+        .race-draw-bottom-sheet,
         .race-candidate-bottom-sheet {
           transform: translateY(var(--sheet-drag-y, 0px)) !important;
           transition:
@@ -8765,6 +9411,7 @@ export default function RaceMap() {
         @media (min-width: 768px) {
           .race-map-bottom-sheet,
           .race-custom-bottom-sheet,
+          .race-draw-bottom-sheet,
           .race-candidate-bottom-sheet {
             transform: translateX(-50%) translateY(var(--sheet-drag-y, 0px)) !important;
           }
@@ -8773,6 +9420,7 @@ export default function RaceMap() {
         @media (orientation: landscape) and (max-height: 560px) {
           .race-map-bottom-sheet,
           .race-custom-bottom-sheet,
+          .race-draw-bottom-sheet,
           .race-candidate-bottom-sheet {
             transform: translateY(var(--sheet-drag-y, 0px)) !important;
           }
@@ -8817,6 +9465,42 @@ export default function RaceMap() {
               rgba(255, 255, 255, 0.10)
             ) !important;
           color: #0f172a !important;
+        }
+
+
+        /* =========================================================
+           Draw route mode
+           - Dedicated map drawing layer above Mapbox and below sheets
+           - All new map modes remain bottom-sheet based
+           ========================================================= */
+        .draw-route-gesture-layer {
+          position: absolute;
+          inset: 0;
+          z-index: 36;
+          touch-action: none;
+          cursor: crosshair;
+          background: transparent;
+        }
+
+        .race-draw-bottom-sheet {
+          z-index: 46 !important;
+        }
+
+        .draw-route-summary-card + .draw-route-guide-card {
+          margin-top: 10px;
+        }
+
+        .race-draw-bottom-sheet .liquid-selected-control:not(:disabled),
+        .race-draw-bottom-sheet button.bg-blue-600:not(:disabled) {
+          border-color: rgba(255, 255, 255, 0.52) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(15, 23, 42, 0.90),
+              rgba(30, 41, 59, 0.66)
+            ) !important;
+          color: rgba(255, 255, 255, 0.98) !important;
+          text-shadow: 0 1px 2px rgba(0, 0, 0, 0.28) !important;
         }
 
       `}</style>
