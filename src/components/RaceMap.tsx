@@ -4931,7 +4931,7 @@ export default function RaceMap() {
           inset: 0;
           z-index: 20;
           overflow: hidden;
-          background-image: url("/backgrounds/runner-bg.jpg");
+          background-image: none;
           background-size: cover;
           background-position: center 42%;
           background-repeat: no-repeat;
@@ -5540,6 +5540,379 @@ export default function RaceMap() {
           border-top: 1px solid rgba(255, 255, 255, 0.32);
           background: rgba(16, 18, 24, 0.82);
         }
+
+
+
+        /* =========================================================
+           Bright Liquid Glass redesign
+           - White / soft-gray background, no photo background
+           - Light glass cards and controls
+           - Color appears only as subtle accent, not heavy CTA blocks
+           ========================================================= */
+        html,
+        body {
+          background:
+            radial-gradient(circle at 18% 10%, rgba(255, 255, 255, 0.98), transparent 34%),
+            radial-gradient(circle at 78% 18%, rgba(219, 234, 254, 0.56), transparent 30%),
+            radial-gradient(circle at 18% 84%, rgba(220, 252, 231, 0.40), transparent 30%),
+            linear-gradient(135deg, #f8fafc 0%, #eef2f7 48%, #f7fbff 100%) !important;
+        }
+
+        .race-root {
+          background:
+            radial-gradient(circle at 12% 8%, rgba(255, 255, 255, 0.96), transparent 34%),
+            radial-gradient(circle at 86% 13%, rgba(191, 219, 254, 0.52), transparent 28%),
+            radial-gradient(circle at 24% 90%, rgba(187, 247, 208, 0.38), transparent 30%),
+            linear-gradient(135deg, #f8fafc 0%, #eef2f7 44%, #f7fbff 100%) !important;
+        }
+
+        .setup-background {
+          position: absolute;
+          inset: 0;
+          z-index: 20;
+          overflow: hidden;
+          background:
+            radial-gradient(circle at 10% 10%, rgba(255, 255, 255, 0.95), transparent 34%),
+            radial-gradient(circle at 86% 16%, rgba(125, 211, 252, 0.24), transparent 28%),
+            radial-gradient(circle at 15% 88%, rgba(134, 239, 172, 0.22), transparent 32%),
+            radial-gradient(circle at 74% 82%, rgba(251, 207, 232, 0.18), transparent 34%),
+            linear-gradient(135deg, #f8fafc 0%, #edf2f8 48%, #fbfdff 100%) !important;
+          background-image: none !important;
+        }
+
+        .setup-background::before {
+          content: "";
+          position: absolute;
+          inset: -20%;
+          z-index: 0;
+          background:
+            linear-gradient(115deg, transparent 0 17%, rgba(255, 255, 255, 0.56) 18% 19%, transparent 20% 100%),
+            linear-gradient(25deg, transparent 0 58%, rgba(255, 255, 255, 0.32) 59% 60%, transparent 61% 100%);
+          filter: blur(1px);
+          opacity: 0.72;
+          pointer-events: none;
+        }
+
+        .setup-background::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: 0;
+          background:
+            radial-gradient(circle at 50% -10%, rgba(255, 255, 255, 0.78), transparent 38%),
+            linear-gradient(to bottom, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.36));
+          pointer-events: none;
+        }
+
+        .race-top-tabs {
+          gap: 10px;
+        }
+
+        .race-tab-button {
+          border: 1px solid rgba(255, 255, 255, 0.78) !important;
+          background:
+            linear-gradient(135deg, rgba(255, 255, 255, 0.70), rgba(255, 255, 255, 0.28)) !important;
+          color: rgba(15, 23, 42, 0.84) !important;
+          backdrop-filter: blur(22px) saturate(170%) !important;
+          -webkit-backdrop-filter: blur(22px) saturate(170%) !important;
+          box-shadow:
+            0 16px 35px rgba(15, 23, 42, 0.10),
+            inset 0 1px 0 rgba(255, 255, 255, 0.88),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.34) !important;
+        }
+
+        .race-tab-active {
+          background:
+            linear-gradient(135deg, rgba(15, 23, 42, 0.88), rgba(36, 45, 62, 0.60)) !important;
+          color: rgba(255, 255, 255, 0.98) !important;
+          border-color: rgba(255, 255, 255, 0.58) !important;
+          box-shadow:
+            0 18px 40px rgba(15, 23, 42, 0.18),
+            inset 0 1px 0 rgba(255, 255, 255, 0.28) !important;
+        }
+
+        /* Core liquid material */
+        .hero-glass-card,
+        .race-setup-panel .rounded-xl.border,
+        .race-setup-panel .rounded-lg.border,
+        .race-setup-panel .rounded-xl[class*="border"],
+        .race-setup-panel .rounded-lg[class*="border"],
+        .run-settings-panel,
+        .race-map-hud,
+        .race-custom-panel,
+        .race-auto-loop-panel,
+        .target-distance-popover {
+          position: relative;
+          overflow: hidden;
+          border: 1px solid rgba(255, 255, 255, 0.74) !important;
+          background:
+            linear-gradient(135deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.24)) !important;
+          color: #0f172a !important;
+          backdrop-filter: blur(28px) saturate(185%) !important;
+          -webkit-backdrop-filter: blur(28px) saturate(185%) !important;
+          box-shadow:
+            0 22px 55px rgba(15, 23, 42, 0.12),
+            inset 0 1px 0 rgba(255, 255, 255, 0.92),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.34) !important;
+        }
+
+        .hero-glass-card {
+          border-radius: 32px !important;
+          background:
+            linear-gradient(135deg, rgba(255, 255, 255, 0.74), rgba(255, 255, 255, 0.30)) !important;
+          box-shadow:
+            0 28px 70px rgba(15, 23, 42, 0.14),
+            inset 0 1px 0 rgba(255, 255, 255, 0.96),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.40) !important;
+        }
+
+        .hero-glass-card::before,
+        .race-setup-panel .rounded-xl.border::before,
+        .race-setup-panel .rounded-lg.border::before,
+        .race-setup-panel .rounded-xl[class*="border"]::before,
+        .race-setup-panel .rounded-lg[class*="border"]::before,
+        .run-settings-panel::before,
+        .race-map-hud::before,
+        .race-custom-panel::before,
+        .race-auto-loop-panel::before,
+        .target-distance-popover::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: 0;
+          background:
+            radial-gradient(circle at 14% 0%, rgba(255, 255, 255, 0.72), transparent 36%),
+            linear-gradient(180deg, rgba(255, 255, 255, 0.42), transparent 42%),
+            radial-gradient(circle at 86% 100%, rgba(191, 219, 254, 0.16), transparent 34%);
+          pointer-events: none;
+        }
+
+        .hero-glass-card > *,
+        .race-setup-panel .rounded-xl.border > *,
+        .race-setup-panel .rounded-lg.border > *,
+        .race-setup-panel .rounded-xl[class*="border"] > *,
+        .race-setup-panel .rounded-lg[class*="border"] > *,
+        .run-settings-panel > *,
+        .race-map-hud > *,
+        .race-custom-panel > *,
+        .race-auto-loop-panel > *,
+        .target-distance-popover > * {
+          position: relative;
+          z-index: 1;
+        }
+
+        /* Force hero typography into bright UI, even if JSX has text-white utilities. */
+        .hero-glass-card,
+        .hero-glass-card .text-white,
+        .hero-glass-card .text-slate-50,
+        .hero-glass-card .text-slate-100 {
+          color: #0f172a !important;
+          text-shadow: none !important;
+        }
+
+        .hero-glass-card .tracking-\[0\.32em\],
+        .hero-glass-card [class*="tracking-"] {
+          color: rgba(5, 150, 105, 0.88) !important;
+          text-shadow: none !important;
+        }
+
+        .race-setup-panel .text-white,
+        .race-setup-panel .text-slate-50,
+        .race-setup-panel .text-slate-100,
+        .race-setup-panel .text-slate-900,
+        .race-setup-panel .text-slate-800,
+        .race-setup-panel .text-slate-700,
+        .race-setup-panel .text-slate-600,
+        .race-setup-panel .text-slate-500,
+        .race-setup-panel .text-slate-400 {
+          color: #0f172a !important;
+        }
+
+        .race-setup-panel .text-slate-500,
+        .race-setup-panel .text-slate-400,
+        .race-setup-panel .text-xs,
+        .race-setup-panel .text-\[11px\],
+        .race-setup-panel .text-\[10px\] {
+          color: rgba(51, 65, 85, 0.78) !important;
+        }
+
+        /* Inner surfaces */
+        .race-setup-panel .bg-white,
+        .race-setup-panel [class*="bg-white/"],
+        .race-setup-panel .bg-slate-50,
+        .race-setup-panel .bg-slate-100,
+        .race-setup-panel .bg-blue-50,
+        .race-setup-panel .bg-indigo-50,
+        .race-setup-panel .bg-purple-50,
+        .race-setup-panel .bg-violet-50,
+        .race-setup-panel .bg-emerald-50,
+        .race-setup-panel .bg-green-50,
+        .race-setup-panel .bg-orange-50,
+        .race-setup-panel .bg-yellow-50,
+        .race-setup-panel .bg-red-50,
+        .run-settings-panel .bg-white,
+        .run-settings-panel .bg-slate-50,
+        .run-settings-panel .bg-blue-50,
+        .run-settings-panel .bg-orange-50 {
+          border: 1px solid rgba(255, 255, 255, 0.62) !important;
+          background:
+            linear-gradient(135deg, rgba(255, 255, 255, 0.52), rgba(255, 255, 255, 0.18)) !important;
+          color: #0f172a !important;
+          backdrop-filter: blur(22px) saturate(170%) !important;
+          -webkit-backdrop-filter: blur(22px) saturate(170%) !important;
+          box-shadow:
+            0 12px 30px rgba(15, 23, 42, 0.08),
+            inset 0 1px 0 rgba(255, 255, 255, 0.82) !important;
+        }
+
+        .race-setup-panel input,
+        .run-settings-panel input {
+          border-color: rgba(255, 255, 255, 0.72) !important;
+          background:
+            linear-gradient(135deg, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0.22)) !important;
+          color: #0f172a !important;
+          backdrop-filter: blur(18px) saturate(170%) !important;
+          -webkit-backdrop-filter: blur(18px) saturate(170%) !important;
+          box-shadow:
+            0 10px 24px rgba(15, 23, 42, 0.08),
+            inset 0 1px 0 rgba(255, 255, 255, 0.84) !important;
+        }
+
+        .race-setup-panel input::placeholder,
+        .run-settings-panel input::placeholder {
+          color: rgba(51, 65, 85, 0.62) !important;
+        }
+
+        /* Liquid buttons: default bright/clear */
+        .race-setup-panel button,
+        .run-settings-panel button,
+        .race-map-hud button,
+        .race-custom-panel button,
+        .race-auto-loop-panel button,
+        .map-location-button,
+        .custom-guide-close {
+          border: 1px solid rgba(255, 255, 255, 0.66) !important;
+          background:
+            linear-gradient(135deg, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0.20)) !important;
+          color: #0f172a !important;
+          backdrop-filter: blur(22px) saturate(175%) !important;
+          -webkit-backdrop-filter: blur(22px) saturate(175%) !important;
+          box-shadow:
+            0 14px 32px rgba(15, 23, 42, 0.10),
+            inset 0 1px 0 rgba(255, 255, 255, 0.82),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.28) !important;
+          text-shadow: none !important;
+          transform: translateY(0) scale(1);
+          transition:
+            transform 140ms ease,
+            box-shadow 140ms ease,
+            filter 140ms ease,
+            background 140ms ease,
+            border-color 140ms ease;
+          will-change: transform;
+        }
+
+        /* Primary CTAs are still bright glass, with dark text, not heavy blocks. */
+        .course-action-button,
+        .course-action-primary,
+        .race-setup-panel button.bg-green-600,
+        .race-setup-panel button.bg-blue-600,
+        .race-setup-panel button.bg-indigo-600,
+        .run-settings-panel button.bg-blue-600 {
+          border-color: rgba(255, 255, 255, 0.78) !important;
+          background:
+            linear-gradient(135deg, rgba(255, 255, 255, 0.74), rgba(255, 255, 255, 0.30)) !important;
+          color: #0f172a !important;
+          font-weight: 950;
+          box-shadow:
+            0 18px 42px rgba(15, 23, 42, 0.14),
+            inset 0 1px 0 rgba(255, 255, 255, 0.96),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.32) !important;
+        }
+
+        .course-action-button::before,
+        .course-action-primary::before,
+        .race-setup-panel button.bg-green-600::before,
+        .race-setup-panel button.bg-blue-600::before,
+        .race-setup-panel button.bg-indigo-600::before,
+        .run-settings-panel button.bg-blue-600::before,
+        .race-setup-panel button::before,
+        .run-settings-panel button::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: 0;
+          border-radius: inherit;
+          background:
+            radial-gradient(circle at 24% 0%, rgba(255, 255, 255, 0.72), transparent 38%),
+            linear-gradient(180deg, rgba(255, 255, 255, 0.40), transparent 48%);
+          pointer-events: none;
+        }
+
+        .race-setup-panel button > *,
+        .run-settings-panel button > *,
+        .course-action-button > *,
+        .course-action-primary > * {
+          position: relative;
+          z-index: 1;
+        }
+
+        .race-setup-panel button:active:not(:disabled),
+        .run-settings-panel button:active:not(:disabled),
+        .race-map-hud button:active:not(:disabled),
+        .race-custom-panel button:active:not(:disabled),
+        .race-auto-loop-panel button:active:not(:disabled),
+        .map-location-button:active:not(:disabled),
+        .custom-guide-close:active:not(:disabled) {
+          transform: translateY(1px) scale(0.972) !important;
+          filter: brightness(0.96) saturate(0.96) !important;
+          box-shadow:
+            0 8px 18px rgba(15, 23, 42, 0.12),
+            inset 0 3px 12px rgba(15, 23, 42, 0.10),
+            inset 0 1px 0 rgba(255, 255, 255, 0.52) !important;
+        }
+
+        .race-setup-panel button:disabled,
+        .run-settings-panel button:disabled,
+        .race-map-hud button:disabled,
+        .race-custom-panel button:disabled,
+        .race-auto-loop-panel button:disabled {
+          border-color: rgba(255, 255, 255, 0.48) !important;
+          background:
+            linear-gradient(135deg, rgba(226, 232, 240, 0.46), rgba(255, 255, 255, 0.16)) !important;
+          color: rgba(71, 85, 105, 0.56) !important;
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.56),
+            0 8px 18px rgba(15, 23, 42, 0.06) !important;
+        }
+
+        .run-settings-backdrop {
+          background: rgba(248, 250, 252, 0.44) !important;
+          backdrop-filter: blur(18px) saturate(170%) !important;
+          -webkit-backdrop-filter: blur(18px) saturate(170%) !important;
+        }
+
+        .run-settings-panel,
+        .race-map-hud,
+        .race-custom-panel,
+        .race-auto-loop-panel {
+          background:
+            linear-gradient(135deg, rgba(255, 255, 255, 0.66), rgba(255, 255, 255, 0.26)) !important;
+        }
+
+        .custom-guide-toast,
+        .target-distance-popover {
+          background:
+            linear-gradient(135deg, rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0.34)) !important;
+          color: #0f172a !important;
+          border-color: rgba(255, 255, 255, 0.72) !important;
+        }
+
+        .target-distance-popover::after {
+          background: rgba(255, 255, 255, 0.70) !important;
+          border-color: rgba(255, 255, 255, 0.72) !important;
+        }
+
 
         @media (orientation: landscape) and (max-height: 560px) {
           .race-top-tabs {
