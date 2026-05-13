@@ -4204,11 +4204,11 @@ export default function RaceMap() {
                   type="button"
                   onClick={() => setPlayerMode("gps")}
                   disabled={isRunning}
-                  className={`rounded-xl px-3 py-3 text-sm font-bold ${
+                  className={`liquid-choice-button rounded-xl px-3 py-3 text-sm font-bold ${
                     playerMode === "gps"
-                      ? "bg-orange-600 text-white"
-                      : "bg-slate-100 text-slate-700"
-                  } disabled:cursor-not-allowed disabled:opacity-60`}
+                      ? "liquid-selected-control"
+                      : "liquid-clear-control"
+                  } disabled:cursor-not-allowed`}
                 >
                   GPS로 실제 달리기
                 </button>
@@ -4217,11 +4217,11 @@ export default function RaceMap() {
                   type="button"
                   onClick={() => setPlayerMode("pace")}
                   disabled={isRunning}
-                  className={`rounded-xl px-3 py-3 text-sm font-bold ${
+                  className={`liquid-choice-button rounded-xl px-3 py-3 text-sm font-bold ${
                     playerMode === "pace"
-                      ? "bg-green-600 text-white"
-                      : "bg-slate-100 text-slate-700"
-                  } disabled:cursor-not-allowed disabled:opacity-60`}
+                      ? "liquid-selected-control"
+                      : "liquid-clear-control"
+                  } disabled:cursor-not-allowed`}
                 >
                   페이스 입력 테스트
                 </button>
@@ -4273,11 +4273,11 @@ export default function RaceMap() {
                   type="button"
                   onClick={() => setSelectedBotIds([])}
                   disabled={isRunning}
-                  className={`rounded-xl px-3 py-3 text-left text-sm font-semibold ${
+                  className={`liquid-choice-button rounded-xl px-3 py-3 text-left text-sm font-semibold ${
                     selectedBotIds.length === 0
-                      ? "bg-slate-900 text-white"
-                      : "bg-slate-100 text-slate-700"
-                  } disabled:cursor-not-allowed disabled:opacity-60`}
+                      ? "liquid-selected-control"
+                      : "liquid-clear-control"
+                  } disabled:cursor-not-allowed`}
                 >
                   없음 · 혼자 달리기
                 </button>
@@ -4291,11 +4291,11 @@ export default function RaceMap() {
                       type="button"
                       onClick={() => setSelectedBotIds([bot.id])}
                       disabled={isRunning}
-                      className={`rounded-xl px-3 py-3 text-left text-sm font-semibold ${
+                      className={`liquid-choice-button rounded-xl px-3 py-3 text-left text-sm font-semibold ${
                         selected
-                          ? "bg-blue-600 text-white"
-                          : "bg-white text-slate-800 ring-1 ring-slate-200"
-                      } disabled:cursor-not-allowed disabled:opacity-60`}
+                          ? "liquid-selected-control"
+                          : "liquid-clear-control"
+                      } disabled:cursor-not-allowed`}
                     >
                       <span className="block">{bot.name}</span>
                       <span
@@ -4423,10 +4423,10 @@ export default function RaceMap() {
                               hideTargetDistanceHint();
                             }}
                             disabled={isRunning || isGeneratingAnyCourse}
-                            className={`rounded-lg px-3 py-2 text-xs font-black transition disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 ${
+                            className={`distance-preset-button rounded-lg px-3 py-2 text-xs font-black transition disabled:cursor-not-allowed ${
                               isActive
-                                ? "bg-slate-900 text-white"
-                                : "bg-white text-slate-700 ring-1 ring-slate-200"
+                                ? "liquid-selected-control"
+                                : "liquid-clear-control"
                             }`}
                           >
                             {preset.label}
@@ -7499,6 +7499,110 @@ export default function RaceMap() {
         }
 
 
+        /* =========================================================
+           PWA pass: explicit selected/unselected liquid controls
+           - Selected: black glass
+           - Unselected: clear glass
+           - Disabled: clear glass, gray text only
+           ========================================================= */
+        .race-root-setup .liquid-selected-control {
+          border: 1px solid rgba(255, 255, 255, 0.42) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(8, 13, 23, 0.86),
+              rgba(31, 41, 55, 0.58)
+            ) !important;
+          color: rgba(255, 255, 255, 0.98) !important;
+          text-shadow: 0 1px 1px rgba(0, 0, 0, 0.32);
+          backdrop-filter: blur(28px) saturate(180%) !important;
+          -webkit-backdrop-filter: blur(28px) saturate(180%) !important;
+          box-shadow:
+            0 14px 32px rgba(15, 23, 42, 0.18),
+            inset 0 1px 0 rgba(255, 255, 255, 0.38),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.10) !important;
+        }
+
+        .race-root-setup .liquid-clear-control {
+          border: 1px solid rgba(148, 163, 184, 0.32) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.18),
+              rgba(255, 255, 255, 0.045)
+            ) !important;
+          color: rgba(15, 23, 42, 0.88) !important;
+          backdrop-filter: blur(30px) saturate(175%) !important;
+          -webkit-backdrop-filter: blur(30px) saturate(175%) !important;
+          box-shadow:
+            0 10px 24px rgba(15, 23, 42, 0.055),
+            inset 0 1px 0 rgba(255, 255, 255, 0.74),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.10) !important;
+        }
+
+        .race-root-setup .distance-preset-button,
+        .race-root-setup .liquid-choice-button {
+          position: relative;
+          overflow: hidden;
+          isolation: isolate;
+        }
+
+        .race-root-setup .distance-preset-button::before,
+        .race-root-setup .liquid-choice-button::before {
+          content: "";
+          position: absolute;
+          inset: 1px;
+          z-index: -1;
+          border-radius: inherit;
+          background:
+            linear-gradient(
+              180deg,
+              rgba(255, 255, 255, 0.55),
+              transparent 48%
+            );
+          opacity: 0.58;
+          pointer-events: none;
+          filter: url("#liquid-glass-soft");
+        }
+
+        .race-root-setup .liquid-selected-control::before {
+          background:
+            linear-gradient(
+              180deg,
+              rgba(255, 255, 255, 0.28),
+              transparent 48%
+            );
+          opacity: 0.70;
+        }
+
+        .race-root-setup .liquid-clear-control:disabled,
+        .race-root-setup button.liquid-clear-control:disabled,
+        .race-root-setup .liquid-selected-control:disabled,
+        .race-root-setup button.liquid-selected-control:disabled {
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.12),
+              rgba(255, 255, 255, 0.035)
+            ) !important;
+          border-color: rgba(148, 163, 184, 0.24) !important;
+          color: rgba(100, 116, 139, 0.56) !important;
+          text-shadow: none !important;
+          opacity: 1 !important;
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.48),
+            0 8px 18px rgba(15, 23, 42, 0.035) !important;
+        }
+
+        .race-root-setup .liquid-selected-control:active:not(:disabled),
+        .race-root-setup .liquid-clear-control:active:not(:disabled) {
+          transform: translateY(1px) scale(0.972);
+          filter: brightness(0.93);
+          box-shadow:
+            0 7px 18px rgba(15, 23, 42, 0.18),
+            inset 0 3px 10px rgba(15, 23, 42, 0.22),
+            inset 0 1px 0 rgba(255, 255, 255, 0.18) !important;
+        }
       `}</style>
 
     </div>
