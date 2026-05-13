@@ -351,6 +351,63 @@ async function fetchWalkingRouteVariants(
     .filter((route) => route.polyline.length >= 2 && route.distanceM > 0);
 }
 
+async function fetchWalkingRouteBySegments(
+  points: LngLat[],
+  token: string,
+  signal?: AbortSignal
+): Promise<{
+  distanceM: number;
+  polyline: LngLat[];
+}> {
+  throwIfCourseSearchAborted(signal);
+
+  const cleaned = removeConsecutiveDuplicatePoints(points).filter((point, index, array) => {
+    if (index === 0) return true;
+    return haversineDistanceM(array[index - 1], point) >= 8;
+  });
+
+  if (cleaned.length < 2) {
+    throw new Error("경로를 만들 수 있는 지점이 부족합니다.");
+  }
+
+  let totalDistanceM = 0;
+  let mergedPolyline: LngLat[] = [];
+
+  for (let index = 1; index < cleaned.length; index += 1) {
+    throwIfCourseSearchAborted(signal);
+
+    const from = cleaned[index - 1];
+    const to = cleaned[index];
+
+    if (haversineDistanceM(from, to) < 8) continue;
+
+    const segment = await fetchWalkingRoute([from, to], token, signal);
+    throwIfCourseSearchAborted(signal);
+
+    totalDistanceM += segment.distanceM;
+
+    if (mergedPolyline.length === 0) {
+      mergedPolyline = segment.polyline;
+    } else {
+      mergedPolyline = [
+        ...mergedPolyline,
+        ...segment.polyline.slice(1),
+      ];
+    }
+  }
+
+  const polyline = removeConsecutiveDuplicatePoints(mergedPolyline);
+
+  if (polyline.length < 2 || totalDistanceM <= 0) {
+    throw new Error("보행 경로를 찾지 못했습니다.");
+  }
+
+  return {
+    distanceM: totalDistanceM,
+    polyline,
+  };
+}
+
 function getBearingCandidates(): number[] {
   return [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
 }
@@ -710,6 +767,76 @@ function getShapePreservingWaypointAttempts(
   return attempts.filter((attempt) => attempt.length >= 2);
 }
 
+function getDistancePreservingWaypointAttempt(
+  points: LngLat[],
+  options: {
+    closeToStart: boolean;
+    waypointCount: number;
+    minDistanceM?: number;
+  }
+): LngLat[] {
+  if (points.length < 2) return [];
+
+  const start = points[0];
+  const finish = options.closeToStart ? start : points[points.length - 1];
+  const count = clampNumber(options.waypointCount, 3, 23);
+  const sampled = samplePolylineEvenly(points, count);
+
+  if (sampled.length < 2) return [];
+
+  sampled[0] = start;
+  sampled[sampled.length - 1] = finish;
+
+  return compactWaypointAttempt(
+    sampled,
+    options.minDistanceM ?? 14
+  );
+}
+
+function getLoopSegmentPreservingWaypointAttempts(
+  points: LngLat[],
+  options: { closeToStart: boolean }
+): LngLat[][] {
+  const drawnDistanceM = getPolylineLengthM(points);
+  const repeatedSignal = getRepeatedLoopSignal(points);
+  const hasLoop = repeatedSignal.hasRepeatedArea || hasOpenLoopGesture(points);
+
+  if (points.length < 2 || drawnDistanceM < 450 || !hasLoop) return [];
+
+  const baseCount = clampNumber(
+    Math.ceil(drawnDistanceM / 180) + 1,
+    9,
+    23
+  );
+  const counts = Array.from(
+    new Set([
+      Math.max(7, baseCount - 4),
+      Math.max(8, baseCount - 2),
+      baseCount,
+      Math.min(23, baseCount + 3),
+    ])
+  );
+
+  const attempts = counts
+    .map((count) =>
+      getDistancePreservingWaypointAttempt(points, {
+        closeToStart: options.closeToStart,
+        waypointCount: count,
+        minDistanceM: drawnDistanceM >= 2500 ? 18 : 12,
+      })
+    )
+    .filter((attempt) => attempt.length >= 3);
+
+  const seen = new Set<string>();
+
+  return attempts.filter((attempt) => {
+    const key = makeDrawAttemptKey(attempt);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function getLoopWaypointAttempts(points: LngLat[]): LngLat[][] {
   if (points.length < 2) return [];
 
@@ -724,6 +851,8 @@ function getLoopWaypointAttempts(points: LngLat[]): LngLat[][] {
     const sampled = fractions.map((ratio) => samplePolylineByRatio(points, ratio));
     return [...sampled, start];
   });
+
+  attempts.unshift(...getLoopSegmentPreservingWaypointAttempts(points, { closeToStart: true }));
 
   // If the user draws a circular loop more than once, or draws a lollipop-style
   // loop with an approach section, sparse 4~6 point attempts collapse the loop.
@@ -1110,8 +1239,19 @@ function calculateDrawRouteShapeScore({
   });
   const drawnDistanceM = Math.max(getPolylineLengthM(drawnPoints), 1);
   const routeDistanceM = Math.max(getPolylineLengthM(routePolyline), 1);
+  const hasOpenLoop = hasOpenLoopGesture(drawnPoints);
+  const loopLikeSketch = isCircular || hasOpenLoop || repeatedSignal.hasRepeatedArea;
+  const expectedMinimumRatio = repeatedSignal.hasRepeatedArea
+    ? 0.88
+    : loopLikeSketch
+      ? 0.76
+      : 0.62;
+  const shortcutDistancePenaltyM = Math.max(
+    0,
+    drawnDistanceM * expectedMinimumRatio - routeDistanceM
+  ) * (repeatedSignal.hasRepeatedArea ? 4.8 : loopLikeSketch ? 3.2 : 1.8);
   const repeatedLoopDistancePenaltyM = repeatedSignal.hasRepeatedArea
-    ? Math.max(0, drawnDistanceM - routeDistanceM) * 1.20
+    ? Math.max(0, drawnDistanceM - routeDistanceM) * 2.40
     : 0;
 
   return (
@@ -1124,6 +1264,7 @@ function calculateDrawRouteShapeScore({
     coverage.averageUncoveredM * 4.60 +
     coverage.maxUncoveredM * 1.15 +
     coverage.uncoveredRatio * drawnDistanceM * 1.05 +
+    shortcutDistancePenaltyM +
     repeatedLoopDistancePenaltyM +
     repeatedPathPenaltyM +
     sharpTurnPenaltyM +
@@ -1140,13 +1281,17 @@ function makeDrawAttemptKey(points: LngLat[]): string {
 
 function makeDrawRouteCandidateKey(route: Pick<Course, "distanceM" | "polyline">): string {
   const start = route.polyline[0];
+  const q1 = samplePolylineByRatio(route.polyline, 0.25);
+  const middle = samplePolylineByRatio(route.polyline, 0.5);
+  const q3 = samplePolylineByRatio(route.polyline, 0.75);
   const finish = route.polyline[route.polyline.length - 1];
-  const middle = route.polyline[Math.floor(route.polyline.length / 2)];
 
   return [
-    Math.round(route.distanceM / 25),
+    Math.round(route.distanceM / 15),
     start ? `${start[0].toFixed(4)},${start[1].toFixed(4)}` : "no-start",
+    q1 ? `${q1[0].toFixed(4)},${q1[1].toFixed(4)}` : "no-q1",
     middle ? `${middle[0].toFixed(4)},${middle[1].toFixed(4)}` : "no-middle",
+    q3 ? `${q3[0].toFixed(4)},${q3[1].toFixed(4)}` : "no-q3",
     finish ? `${finish[0].toFixed(4)},${finish[1].toFixed(4)}` : "no-finish",
   ].join("|");
 }
@@ -1181,7 +1326,8 @@ function getDrawRouteAttempts(points: LngLat[]): LngLat[][] {
   // last point by a shortcut and ignore the loop portion.
   attempts.push(...getShapePreservingWaypointAttempts(points, { closeToStart: false }));
 
-  if (hasOpenLoopGesture(points)) {
+  if (hasOpenLoopGesture(points) || getRepeatedLoopSignal(points).hasRepeatedArea) {
+    attempts.unshift(...getLoopSegmentPreservingWaypointAttempts(points, { closeToStart: false }));
     attempts.push(...getShapePreservingWaypointAttempts(points, { closeToStart: false }));
   }
 
@@ -1237,11 +1383,73 @@ async function generateDrawnRouteCandidates({
   const attempts = isCircular
     ? getLoopWaypointAttempts(drawnPoints)
     : getDrawRouteAttempts(drawnPoints);
+  const loopPreservingAttempts =
+    hasOpenLoop || repeatedSignal.hasRepeatedArea || repeatedSignal.estimatedLapCount >= 2
+      ? getLoopSegmentPreservingWaypointAttempts(drawnPoints, {
+          closeToStart: isCircular,
+        }).slice(0, 2)
+      : [];
   const seenRoutes = new Set<string>();
   const scoredCandidates: Array<{
     candidate: AutoLoopCourseCandidate;
     score: number;
   }> = [];
+
+  const addRouteCandidate = (
+    route: { distanceM: number; polyline: LngLat[] },
+    scoreMultiplier = 1
+  ) => {
+    const key = makeDrawRouteCandidateKey(route);
+    if (seenRoutes.has(key)) return;
+    seenRoutes.add(key);
+
+    const distanceErrorM = Math.abs(route.distanceM - drawnDistanceM);
+    const rawScore = calculateDrawRouteShapeScore({
+      routePolyline: route.polyline,
+      drawnPoints,
+      distanceErrorM,
+      isCircular,
+    });
+    const score = rawScore * scoreMultiplier;
+
+    scoredCandidates.push({
+      candidate: {
+        id: `draw-route-candidate-${scoredCandidates.length + 1}`,
+        candidateId: `draw-route-candidate-${scoredCandidates.length + 1}`,
+        name: `${drawCandidateLabel} 후보 ${scoredCandidates.length + 1}`,
+        distanceM: route.distanceM,
+        distanceErrorM,
+        isWithinTolerance: isCircular
+          ? score <= Math.max(900, drawnDistanceM * 0.72)
+          : score <= Math.max(650, drawnDistanceM * 0.48),
+        bearingDeg: 0,
+        endpoint: isCircular ? start : finish,
+        straightDistanceM: haversineDistanceM(start, finish),
+        outboundDistanceM: route.distanceM,
+        polyline: route.polyline,
+      },
+      score,
+    });
+  };
+
+  for (const attempt of loopPreservingAttempts) {
+    throwIfCourseSearchAborted(signal);
+
+    try {
+      const route = await fetchWalkingRouteBySegments(attempt, token, signal);
+      throwIfCourseSearchAborted(signal);
+      addRouteCandidate(route, 0.72);
+    } catch (error) {
+      if (isCourseSearchAbortError(error)) {
+        throw error;
+      }
+
+      console.warn("Failed to generate loop-preserving drawn route candidate:", {
+        attempt,
+        error,
+      });
+    }
+  }
 
   for (const attempt of attempts) {
     throwIfCourseSearchAborted(signal);
@@ -1257,36 +1465,7 @@ async function generateDrawnRouteCandidates({
       throwIfCourseSearchAborted(signal);
 
       routes.forEach((route) => {
-        const key = makeDrawRouteCandidateKey(route);
-        if (seenRoutes.has(key)) return;
-        seenRoutes.add(key);
-
-        const distanceErrorM = Math.abs(route.distanceM - drawnDistanceM);
-        const score = calculateDrawRouteShapeScore({
-          routePolyline: route.polyline,
-          drawnPoints,
-          distanceErrorM,
-          isCircular,
-        });
-
-        scoredCandidates.push({
-          candidate: {
-            id: `draw-route-candidate-${scoredCandidates.length + 1}`,
-            candidateId: `draw-route-candidate-${scoredCandidates.length + 1}`,
-            name: `${drawCandidateLabel} 후보 ${scoredCandidates.length + 1}`,
-            distanceM: route.distanceM,
-            distanceErrorM,
-            isWithinTolerance: isCircular
-              ? score <= Math.max(900, drawnDistanceM * 0.72)
-              : score <= Math.max(650, drawnDistanceM * 0.48),
-            bearingDeg: 0,
-            endpoint: isCircular ? start : finish,
-            straightDistanceM: haversineDistanceM(start, finish),
-            outboundDistanceM: route.distanceM,
-            polyline: route.polyline,
-          },
-          score,
-        });
+        addRouteCandidate(route);
       });
     } catch (error) {
       if (isCourseSearchAbortError(error)) {
