@@ -19,7 +19,7 @@ import {
 
 type PlayerMode = "pace" | "gps";
 type ActivePanel = "setup" | "map";
-type SetupView = "main" | "myCourses" | "customCourses";
+type SetupView = "main" | "myCourses";
 type CandidateMode = "outAndBack" | "oneWay";
 type CustomPointStep = "start" | "turnaround" | "finish";
 type CustomGuide =
@@ -46,24 +46,32 @@ type CustomCoursePoints = {
   finish: LngLat | null;
 };
 
-type SavedCourseRecord = Course & {
-  savedId: string;
+type CourseOrigin = "generated" | "custom" | "completed-import";
+
+type StoredCourseRecord = Course & {
+  courseId: string;
   favorite: boolean;
-  order: number;
+  source: CourseOrigin;
   createdAt: number;
   updatedAt: number;
+  courseMode: CandidateMode | "custom" | "saved" | null;
+  turnaround: LngLat | null;
+  completionCount: number;
+  lastCompletedAt: number | null;
+  bestElapsedSec: number | null;
+};
+
+type RunRecord = {
+  runId: string;
+  courseId: string;
+  courseName: string;
+  distanceM: number;
+  polyline: LngLat[];
   completedAt: number;
   elapsedSec: number | null;
   courseMode: CandidateMode | "custom" | "saved" | null;
   turnaround: LngLat | null;
-};
-
-type CustomCourseRecord = Course & {
-  customId: string;
-  createdAt: number;
   updatedAt: number;
-  courseMode: "custom";
-  turnaround: LngLat | null;
 };
 
 type ElevationSummary =
@@ -106,8 +114,10 @@ type DirectionsResponse = {
 };
 
 const INITIAL_SELECTED_BOT_IDS: string[] = [];
-const SAVED_COURSES_STORAGE_KEY = "runbot:savedCourses:v1";
-const CUSTOM_COURSES_STORAGE_KEY = "runbot:customCourses:v1";
+const RUN_RECORDS_STORAGE_KEY = "runbot:runRecords:v1";
+const COURSE_LIBRARY_STORAGE_KEY = "runbot:courseLibrary:v1";
+const LEGACY_SAVED_COURSES_STORAGE_KEY = "runbot:savedCourses:v1";
+const LEGACY_CUSTOM_COURSES_STORAGE_KEY = "runbot:customCourses:v1";
 const AUTO_LOOP_PAGE_SIZE = 5;
 const AUTO_LOOP_COLORS = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#3b82f6"];
 const DEFAULT_DISTANCE_TOLERANCE_M = 500;
@@ -691,33 +701,124 @@ function createCustomPointMarkerElement(type: CustomPointStep) {
   return wrapper;
 }
 
-function getSortedSavedCourses(courses: SavedCourseRecord[]): SavedCourseRecord[] {
+function getSortedRunRecords(records: RunRecord[]): RunRecord[] {
+  return [...records].sort((a, b) => b.completedAt - a.completedAt);
+}
+
+function getSortedCourseLibrary(courses: StoredCourseRecord[]): StoredCourseRecord[] {
   return [...courses].sort((a, b) => {
     if (a.favorite !== b.favorite) return a.favorite ? -1 : 1;
-    return b.completedAt - a.completedAt;
+    const aTime = a.lastCompletedAt ?? a.updatedAt ?? a.createdAt;
+    const bTime = b.lastCompletedAt ?? b.updatedAt ?? b.createdAt;
+    return bTime - aTime;
   });
 }
 
-function getSortedCustomCourses(courses: CustomCourseRecord[]): CustomCourseRecord[] {
-  return [...courses].sort((a, b) => b.createdAt - a.createdAt);
+function getCourseSourceLabel(source: CourseOrigin): string {
+  if (source === "custom") return "저장 코스";
+  if (source === "generated") return "자동 추천";
+  return "기록에서 생성";
 }
 
-function validateSavedCourseRecord(value: unknown): SavedCourseRecord | null {
+function validateStoredCourseRecord(value: unknown): StoredCourseRecord | null {
   if (typeof value !== "object" || value === null) return null;
 
-  const record = value as Partial<SavedCourseRecord>;
+  const record = value as Partial<StoredCourseRecord>;
+  const polyline = Array.isArray(record.polyline) ? record.polyline : null;
 
   if (
-    typeof record.savedId !== "string" ||
+    typeof record.courseId !== "string" ||
     typeof record.id !== "string" ||
     typeof record.name !== "string" ||
     typeof record.distanceM !== "number" ||
-    !Array.isArray(record.polyline)
+    !polyline
   ) {
     return null;
   }
 
-  const validPolyline = record.polyline.every((point) => {
+  const validPolyline = polyline.every((point) => {
+    return (
+      Array.isArray(point) &&
+      point.length === 2 &&
+      typeof point[0] === "number" &&
+      typeof point[1] === "number" &&
+      Number.isFinite(point[0]) &&
+      Number.isFinite(point[1])
+    );
+  });
+
+  if (!validPolyline) return null;
+
+  const validTurnaround =
+    Array.isArray(record.turnaround) &&
+    record.turnaround.length === 2 &&
+    typeof record.turnaround[0] === "number" &&
+    typeof record.turnaround[1] === "number" &&
+    Number.isFinite(record.turnaround[0]) &&
+    Number.isFinite(record.turnaround[1])
+      ? ([record.turnaround[0], record.turnaround[1]] as LngLat)
+      : null;
+
+  const validCourseMode =
+    record.courseMode === "outAndBack" ||
+    record.courseMode === "oneWay" ||
+    record.courseMode === "custom" ||
+    record.courseMode === "saved"
+      ? record.courseMode
+      : null;
+
+  const validSource: CourseOrigin =
+    record.source === "generated" ||
+    record.source === "custom" ||
+    record.source === "completed-import"
+      ? record.source
+      : validCourseMode === "custom"
+        ? "custom"
+        : "generated";
+
+  return {
+    courseId: record.courseId,
+    id: record.id,
+    name: record.name,
+    distanceM: record.distanceM,
+    polyline: polyline as LngLat[],
+    favorite: Boolean(record.favorite),
+    source: validSource,
+    createdAt: typeof record.createdAt === "number" ? record.createdAt : Date.now(),
+    updatedAt: typeof record.updatedAt === "number" ? record.updatedAt : Date.now(),
+    courseMode: validCourseMode ?? "saved",
+    turnaround: validTurnaround,
+    completionCount:
+      typeof record.completionCount === "number" && Number.isFinite(record.completionCount)
+        ? Math.max(0, Math.round(record.completionCount))
+        : 0,
+    lastCompletedAt:
+      typeof record.lastCompletedAt === "number" && Number.isFinite(record.lastCompletedAt)
+        ? record.lastCompletedAt
+        : null,
+    bestElapsedSec:
+      typeof record.bestElapsedSec === "number" && Number.isFinite(record.bestElapsedSec)
+        ? record.bestElapsedSec
+        : null,
+  };
+}
+
+function validateRunRecord(value: unknown): RunRecord | null {
+  if (typeof value !== "object" || value === null) return null;
+
+  const record = value as Partial<RunRecord> & Partial<Course>;
+  const polyline = Array.isArray(record.polyline) ? record.polyline : null;
+
+  if (
+    typeof record.runId !== "string" ||
+    typeof record.courseId !== "string" ||
+    typeof record.distanceM !== "number" ||
+    !polyline
+  ) {
+    return null;
+  }
+
+  const validPolyline = polyline.every((point) => {
     return (
       Array.isArray(point) &&
       point.length === 2 &&
@@ -749,82 +850,149 @@ function validateSavedCourseRecord(value: unknown): SavedCourseRecord | null {
       : null;
 
   return {
-    savedId: record.savedId,
-    id: record.id,
-    name: record.name,
+    runId: record.runId,
+    courseId: record.courseId,
+    courseName:
+      typeof record.courseName === "string"
+        ? record.courseName
+        : typeof record.name === "string"
+          ? record.name
+          : "완주 코스",
     distanceM: record.distanceM,
-    polyline: record.polyline as LngLat[],
-    favorite: Boolean(record.favorite),
-    order: typeof record.order === "number" ? record.order : 0,
-    createdAt:
-      typeof record.createdAt === "number" ? record.createdAt : Date.now(),
-    updatedAt:
-      typeof record.updatedAt === "number" ? record.updatedAt : Date.now(),
-    completedAt:
-      typeof record.completedAt === "number"
-        ? record.completedAt
-        : typeof record.createdAt === "number"
-          ? record.createdAt
-          : Date.now(),
+    polyline: polyline as LngLat[],
+    completedAt: typeof record.completedAt === "number" ? record.completedAt : Date.now(),
     elapsedSec:
       typeof record.elapsedSec === "number" && Number.isFinite(record.elapsedSec)
         ? record.elapsedSec
         : null,
     courseMode: validCourseMode ?? "saved",
     turnaround: validTurnaround,
+    updatedAt: typeof record.updatedAt === "number" ? record.updatedAt : Date.now(),
   };
 }
 
-function validateCustomCourseRecord(value: unknown): CustomCourseRecord | null {
+function makeStoredCourseFromLegacyCustom(value: unknown): StoredCourseRecord | null {
   if (typeof value !== "object" || value === null) return null;
+  const legacy = value as Partial<Course> & {
+    customId?: string;
+    favorite?: boolean;
+    createdAt?: number;
+    updatedAt?: number;
+    courseMode?: "custom";
+    turnaround?: LngLat | null;
+  };
 
-  const record = value as Partial<CustomCourseRecord>;
+  const courseId = typeof legacy.customId === "string" ? legacy.customId : undefined;
+  if (!courseId) return null;
 
-  if (
-    typeof record.customId !== "string" ||
-    typeof record.id !== "string" ||
-    typeof record.name !== "string" ||
-    typeof record.distanceM !== "number" ||
-    !Array.isArray(record.polyline)
-  ) {
-    return null;
+  return validateStoredCourseRecord({
+    ...legacy,
+    courseId,
+    source: "custom",
+    completionCount: 0,
+    lastCompletedAt: null,
+    bestElapsedSec: null,
+  });
+}
+
+function makeCourseKey(course: Pick<Course, "polyline" | "distanceM">): string {
+  const start = course.polyline[0];
+  const finish = course.polyline[course.polyline.length - 1];
+  return [
+    Math.round(course.distanceM),
+    start ? `${start[0].toFixed(5)},${start[1].toFixed(5)}` : "no-start",
+    finish ? `${finish[0].toFixed(5)},${finish[1].toFixed(5)}` : "no-finish",
+  ].join("|");
+}
+
+function makeLegacyRunMigration(rawLegacyRuns: unknown): {
+  migratedCourses: StoredCourseRecord[];
+  migratedRuns: RunRecord[];
+} {
+  if (!Array.isArray(rawLegacyRuns)) {
+    return { migratedCourses: [], migratedRuns: [] };
   }
 
-  const validPolyline = record.polyline.every((point) => {
-    return (
-      Array.isArray(point) &&
-      point.length === 2 &&
-      typeof point[0] === "number" &&
-      typeof point[1] === "number" &&
-      Number.isFinite(point[0]) &&
-      Number.isFinite(point[1])
-    );
+  const courseByKey = new Map<string, StoredCourseRecord>();
+  const migratedRuns: RunRecord[] = [];
+
+  rawLegacyRuns.forEach((value, index) => {
+    if (typeof value !== "object" || value === null) return;
+    const legacy = value as Partial<Course> & {
+      savedId?: string;
+      favorite?: boolean;
+      completedAt?: number;
+      elapsedSec?: number | null;
+      courseMode?: CandidateMode | "custom" | "saved" | null;
+      turnaround?: LngLat | null;
+      updatedAt?: number;
+    };
+
+    if (
+      typeof legacy.savedId !== "string" ||
+      typeof legacy.name !== "string" ||
+      typeof legacy.distanceM !== "number" ||
+      !Array.isArray(legacy.polyline)
+    ) {
+      return;
+    }
+
+    const completedAt = typeof legacy.completedAt === "number" ? legacy.completedAt : Date.now() - index;
+    const key = makeCourseKey({ distanceM: legacy.distanceM, polyline: legacy.polyline as LngLat[] });
+    let storedCourse = courseByKey.get(key);
+
+    if (!storedCourse) {
+      const source: CourseOrigin = legacy.courseMode === "custom" ? "custom" : "completed-import";
+      storedCourse = validateStoredCourseRecord({
+        id: `course-origin-${legacy.savedId}`,
+        courseId: `course-origin-${legacy.savedId}`,
+        name: legacy.name,
+        distanceM: legacy.distanceM,
+        polyline: legacy.polyline,
+        favorite: Boolean(legacy.favorite),
+        source,
+        createdAt: completedAt,
+        updatedAt: typeof legacy.updatedAt === "number" ? legacy.updatedAt : completedAt,
+        courseMode: legacy.courseMode ?? "saved",
+        turnaround: legacy.turnaround ?? null,
+        completionCount: 0,
+        lastCompletedAt: null,
+        bestElapsedSec: null,
+      }) ?? undefined;
+
+      if (!storedCourse) return;
+      courseByKey.set(key, storedCourse);
+    }
+
+    const run = validateRunRecord({
+      runId: legacy.savedId,
+      courseId: storedCourse.courseId,
+      courseName: legacy.name,
+      distanceM: legacy.distanceM,
+      polyline: legacy.polyline,
+      completedAt,
+      elapsedSec: legacy.elapsedSec ?? null,
+      courseMode: legacy.courseMode ?? "saved",
+      turnaround: legacy.turnaround ?? null,
+      updatedAt: typeof legacy.updatedAt === "number" ? legacy.updatedAt : completedAt,
+    });
+
+    if (run) migratedRuns.push(run);
+
+    storedCourse.completionCount += 1;
+    storedCourse.lastCompletedAt = Math.max(storedCourse.lastCompletedAt ?? 0, completedAt);
+    if (run?.elapsedSec !== null && run?.elapsedSec !== undefined) {
+      storedCourse.bestElapsedSec =
+        storedCourse.bestElapsedSec === null
+          ? run.elapsedSec
+          : Math.min(storedCourse.bestElapsedSec, run.elapsedSec);
+    }
+    storedCourse.updatedAt = Date.now();
   });
 
-  if (!validPolyline) return null;
-
-  const validTurnaround =
-    Array.isArray(record.turnaround) &&
-    record.turnaround.length === 2 &&
-    typeof record.turnaround[0] === "number" &&
-    typeof record.turnaround[1] === "number" &&
-    Number.isFinite(record.turnaround[0]) &&
-    Number.isFinite(record.turnaround[1])
-      ? ([record.turnaround[0], record.turnaround[1]] as LngLat)
-      : null;
-
   return {
-    customId: record.customId,
-    id: record.id,
-    name: record.name,
-    distanceM: record.distanceM,
-    polyline: record.polyline as LngLat[],
-    createdAt:
-      typeof record.createdAt === "number" ? record.createdAt : Date.now(),
-    updatedAt:
-      typeof record.updatedAt === "number" ? record.updatedAt : Date.now(),
-    courseMode: "custom",
-    turnaround: validTurnaround,
+    migratedCourses: Array.from(courseByKey.values()),
+    migratedRuns,
   };
 }
 
@@ -889,6 +1057,7 @@ function formatElevationSummary(summary: ElevationSummary | undefined): string {
     summary.lossM
   )}m · 고도 ${Math.round(summary.minM)}~${Math.round(summary.maxM)}m`;
 }
+
 function formatCompletedDate(timestamp: number): string {
   return new Intl.DateTimeFormat("ko-KR", {
     year: "numeric",
@@ -915,27 +1084,34 @@ function formatDuration(seconds: number | null): string {
   return `${minutes}분 ${restSeconds.toString().padStart(2, "0")}초`;
 }
 
-function getSavedCourseModeLabel(mode: SavedCourseRecord["courseMode"]): string {
+function getRunRecordModeLabel(mode: RunRecord["courseMode"]): string {
   if (mode === "outAndBack") return "왕복";
   if (mode === "oneWay") return "편도";
-  if (mode === "custom") return "수동";
+  if (mode === "custom") return "커스텀";
   return "저장 코스";
 }
 
-function groupSavedCoursesByDate(courses: SavedCourseRecord[]): Array<{
-  dateLabel: string;
-  courses: SavedCourseRecord[];
-}> {
-  const groups: Array<{ dateLabel: string; courses: SavedCourseRecord[] }> = [];
+function getStoredCourseModeLabel(mode: StoredCourseRecord["courseMode"]): string {
+  if (mode === "outAndBack") return "왕복";
+  if (mode === "oneWay") return "편도";
+  if (mode === "custom") return "커스텀";
+  return "저장 코스";
+}
 
-  courses.forEach((course) => {
-    const dateLabel = formatCompletedDate(course.completedAt);
+function groupRunRecordsByDate(records: RunRecord[]): Array<{
+  dateLabel: string;
+  records: RunRecord[];
+}> {
+  const groups: Array<{ dateLabel: string; records: RunRecord[] }> = [];
+
+  records.forEach((record) => {
+    const dateLabel = formatCompletedDate(record.completedAt);
     const existing = groups.find((group) => group.dateLabel === dateLabel);
 
     if (existing) {
-      existing.courses.push(course);
+      existing.records.push(record);
     } else {
-      groups.push({ dateLabel, courses: [course] });
+      groups.push({ dateLabel, records: [record] });
     }
   });
 
@@ -975,12 +1151,13 @@ export default function RaceMap() {
   const [activeCourse, setActiveCourse] = useState<Course>(DEFAULT_COURSE);
   const [activeCourseMode, setActiveCourseMode] = useState<CandidateMode | "custom" | "saved" | null>(null);
   const [activeCourseTurnaround, setActiveCourseTurnaround] = useState<LngLat | null>(null);
+  const [activeCourseOriginId, setActiveCourseOriginId] = useState<string | null>(null);
   const [candidateMode, setCandidateMode] = useState<CandidateMode>("outAndBack");
 
-  const [savedCourses, setSavedCourses] = useState<SavedCourseRecord[]>([]);
-  const [hasLoadedSavedCourses, setHasLoadedSavedCourses] = useState(false);
-  const [customCourses, setCustomCourses] = useState<CustomCourseRecord[]>([]);
-  const [hasLoadedCustomCourses, setHasLoadedCustomCourses] = useState(false);
+  const [runRecords, setRunRecords] = useState<RunRecord[]>([]);
+  const [hasLoadedRunRecords, setHasLoadedRunRecords] = useState(false);
+  const [courseLibrary, setCourseLibrary] = useState<StoredCourseRecord[]>([]);
+  const [hasLoadedCourseLibrary, setHasLoadedCourseLibrary] = useState(false);
 
   const [status, setStatus] = useState("코스를 선택해 주세요.");
   const [error, setError] = useState<string | null>(null);
@@ -1060,21 +1237,21 @@ export default function RaceMap() {
     return DEFAULT_BOTS.filter((bot) => selectedBotIds.includes(bot.id));
   }, [selectedBotIds]);
 
-  const sortedSavedCourses = useMemo(() => {
-    return getSortedSavedCourses(savedCourses);
-  }, [savedCourses]);
+  const sortedRunRecords = useMemo(() => {
+    return getSortedRunRecords(runRecords);
+  }, [runRecords]);
 
-  const favoriteSavedCourses = useMemo(() => {
-    return sortedSavedCourses.filter((course) => course.favorite);
-  }, [sortedSavedCourses]);
+  const sortedCourseLibrary = useMemo(() => {
+    return getSortedCourseLibrary(courseLibrary);
+  }, [courseLibrary]);
 
-  const sortedCustomCourses = useMemo(() => {
-    return getSortedCustomCourses(customCourses);
-  }, [customCourses]);
+  const favoriteCourseLibrary = useMemo(() => {
+    return sortedCourseLibrary.filter((course) => course.favorite);
+  }, [sortedCourseLibrary]);
 
-  const savedCourseGroups = useMemo(() => {
-    return groupSavedCoursesByDate(sortedSavedCourses);
-  }, [sortedSavedCourses]);
+  const runRecordGroups = useMemo(() => {
+    return groupRunRecordsByDate(sortedRunRecords);
+  }, [sortedRunRecords]);
 
   const previewingAutoLoopCandidate = useMemo(() => {
     return (
@@ -1784,39 +1961,132 @@ export default function RaceMap() {
     setStatus("수동 코스 지점을 초기화했습니다.");
   }
 
-  function makeSavedCourseRecord({
+  function makeStoredCourseRecord({
     course,
     name,
+    turnaround,
+    source = "custom",
+    courseMode = "custom",
+    createdAt = Date.now(),
+    courseId,
+    favorite = false,
+  }: {
+    course: Course;
+    name: string;
+    turnaround: LngLat | null;
+    source?: CourseOrigin;
+    courseMode?: CandidateMode | "custom" | "saved" | null;
+    createdAt?: number;
+    courseId?: string;
+    favorite?: boolean;
+  }): StoredCourseRecord {
+    const id = courseId ?? `course-origin-${createdAt}`;
+
+    return {
+      ...course,
+      id,
+      courseId: id,
+      name,
+      favorite,
+      source,
+      createdAt,
+      updatedAt: createdAt,
+      courseMode,
+      turnaround,
+      completionCount: 0,
+      lastCompletedAt: null,
+      bestElapsedSec: null,
+    };
+  }
+
+  function makeRunRecord({
+    course,
+    courseId,
+    courseName,
     courseMode,
     turnaround,
     completedAt = Date.now(),
     elapsedSec = null,
   }: {
     course: Course;
-    name: string;
+    courseId: string;
+    courseName: string;
     courseMode: CandidateMode | "custom" | "saved" | null;
     turnaround: LngLat | null;
     completedAt?: number;
     elapsedSec?: number | null;
-  }): SavedCourseRecord {
+  }): RunRecord {
     return {
-      ...course,
-      id: `completed-course-base-${completedAt}`,
-      name,
-      savedId: `completed-course-${completedAt}`,
-      favorite: false,
-      order: -completedAt,
-      createdAt: completedAt,
-      updatedAt: completedAt,
+      runId: `run-record-${completedAt}`,
+      courseId,
+      courseName,
+      distanceM: course.distanceM,
+      polyline: course.polyline,
       completedAt,
       elapsedSec,
       courseMode,
       turnaround,
+      updatedAt: completedAt,
     };
   }
 
-  function saveCourseRecord(record: SavedCourseRecord) {
-    setSavedCourses((current) => [record, ...current]);
+  function updateCourseStatsAfterRun(courseId: string, completedAt: number, elapsedSec: number | null) {
+    setCourseLibrary((current) =>
+      current.map((course) => {
+        if (course.courseId !== courseId) return course;
+
+        const nextBestElapsedSec =
+          elapsedSec === null || !Number.isFinite(elapsedSec)
+            ? course.bestElapsedSec
+            : course.bestElapsedSec === null
+              ? elapsedSec
+              : Math.min(course.bestElapsedSec, elapsedSec);
+
+        return {
+          ...course,
+          completionCount: course.completionCount + 1,
+          lastCompletedAt: Math.max(course.lastCompletedAt ?? 0, completedAt),
+          bestElapsedSec: nextBestElapsedSec,
+          updatedAt: Date.now(),
+        };
+      })
+    );
+  }
+
+  function ensureStoredCourseForActiveRun({
+    completedAt,
+    fallbackName,
+  }: {
+    completedAt: number;
+    fallbackName: string;
+  }): StoredCourseRecord {
+    if (activeCourseOriginId) {
+      const existing = courseLibrary.find(
+        (course) => course.courseId === activeCourseOriginId
+      );
+
+      if (existing) return existing;
+    }
+
+    const source: CourseOrigin = activeCourseMode === "custom" ? "custom" : "generated";
+    const course = makeStoredCourseRecord({
+      course: activeCourse,
+      name: fallbackName,
+      turnaround: activeCourseTurnaround,
+      source,
+      courseMode: activeCourseMode ?? "saved",
+      createdAt: completedAt,
+      courseId: `course-origin-${completedAt}`,
+    });
+
+    setCourseLibrary((current) => [course, ...current]);
+    setActiveCourseOriginId(course.courseId);
+
+    return course;
+  }
+
+  function saveRunRecord(record: RunRecord) {
+    setRunRecords((current) => [record, ...current]);
   }
 
   function recordCompletedActiveCourse(finalElapsedSec: number) {
@@ -1832,45 +2102,29 @@ export default function RaceMap() {
           )} 코스 ${(courseLengthM / 1000).toFixed(2)}km`;
 
     const completedAt = Date.now();
-    const record = makeSavedCourseRecord({
+    const storedCourse = ensureStoredCourseForActiveRun({
+      completedAt,
+      fallbackName: defaultName,
+    });
+
+    const record = makeRunRecord({
       course: activeCourse,
-      name: defaultName,
-      courseMode: activeCourseMode ?? "saved",
+      courseId: storedCourse.courseId,
+      courseName: storedCourse.name,
+      courseMode: activeCourseMode ?? storedCourse.courseMode ?? "saved",
       turnaround: activeCourseTurnaround,
       completedAt,
       elapsedSec: finalElapsedSec,
     });
 
-    saveCourseRecord(record);
+    saveRunRecord(record);
+    updateCourseStatsAfterRun(storedCourse.courseId, completedAt, finalElapsedSec);
   }
 
-  function makeCustomCourseRecord({
-    course,
-    name,
-    turnaround,
-  }: {
-    course: Course;
-    name: string;
-    turnaround: LngLat | null;
-  }): CustomCourseRecord {
-    const now = Date.now();
-
-    return {
-      ...course,
-      id: `custom-course-base-${now}`,
-      customId: `custom-course-${now}`,
-      name,
-      createdAt: now,
-      updatedAt: now,
-      courseMode: "custom",
-      turnaround,
-    };
-  }
-
-  function updateCustomCourseName(customId: string, name: string) {
-    setCustomCourses((current) =>
+  function updateStoredCourseName(courseId: string, name: string) {
+    setCourseLibrary((current) =>
       current.map((course) =>
-        course.customId === customId
+        course.courseId === courseId
           ? {
               ...course,
               name,
@@ -1881,7 +2135,21 @@ export default function RaceMap() {
     );
   }
 
-  function applyCustomCourse(course: CustomCourseRecord) {
+  function toggleStoredCourseFavorite(courseId: string) {
+    setCourseLibrary((current) =>
+      current.map((course) =>
+        course.courseId === courseId
+          ? {
+              ...course,
+              favorite: !course.favorite,
+              updatedAt: Date.now(),
+            }
+          : course
+      )
+    );
+  }
+
+  function applyStoredCourse(course: StoredCourseRecord) {
     const nextCourse: Course = {
       id: course.id,
       name: course.name,
@@ -1898,45 +2166,36 @@ export default function RaceMap() {
     setCustomGuide(null);
     setCustomPoints(INITIAL_CUSTOM_POINTS);
     setActiveCourseTurnaround(course.turnaround);
-    setActiveCourseMode("custom");
+    setActiveCourseMode(course.courseMode ?? "saved");
+    setActiveCourseOriginId(course.courseId);
     setActiveCourse(nextCourse);
     setActivePanel("map");
     setSetupView("main");
-    setStatus(`${course.name} 커스텀 코스를 지도에 표시했습니다.`);
+    setStatus(`${course.name} 코스를 지도에 표시했습니다.`);
   }
 
-  function deleteCustomCourse(customId: string) {
-    const target = customCourses.find((course) => course.customId === customId);
+  function deleteStoredCourse(courseId: string) {
+    const target = courseLibrary.find((course) => course.courseId === courseId);
 
-    if (target && !window.confirm(`"${target.name}" 커스텀 코스를 삭제할까요?`)) {
+    if (target && !window.confirm(`"${target.name}" 저장 코스를 삭제할까요? 완주 기록은 유지됩니다.`)) {
       return;
     }
 
-    setCustomCourses((current) =>
-      current.filter((course) => course.customId !== customId)
+    setCourseLibrary((current) =>
+      current.filter((course) => course.courseId !== courseId)
     );
+
+    if (activeCourseOriginId === courseId) {
+      setActiveCourseOriginId(null);
+    }
   }
 
-  function updateSavedCourseName(savedId: string, name: string) {
-    setSavedCourses((current) =>
-      current.map((course) =>
-        course.savedId === savedId
-          ? {
-              ...course,
-              name,
-              updatedAt: Date.now(),
-            }
-          : course
-      )
-    );
-  }
-
-  function applySavedCourse(course: SavedCourseRecord) {
+  function applyRunRecord(record: RunRecord) {
     const nextCourse: Course = {
-      id: course.id,
-      name: course.name,
-      distanceM: course.distanceM,
-      polyline: course.polyline,
+      id: `run-snapshot-${record.runId}`,
+      name: record.courseName,
+      distanceM: record.distanceM,
+      polyline: record.polyline,
     };
 
     gpsTracker.stop();
@@ -1946,87 +2205,24 @@ export default function RaceMap() {
 
     setIsCustomCourseMode(false);
     setCustomGuide(null);
-    setActiveCourseTurnaround(course.turnaround);
-    setActiveCourseMode(course.courseMode ?? "saved");
+    setActiveCourseTurnaround(record.turnaround);
+    setActiveCourseMode(record.courseMode ?? "saved");
+    setActiveCourseOriginId(record.courseId);
     setActiveCourse(nextCourse);
     setActivePanel("map");
     setSetupView("main");
-    setStatus(`${course.name} 기록 코스를 지도에 표시했습니다.`);
+    setStatus(`${record.courseName} 완주 기록 코스를 지도에 표시했습니다.`);
   }
 
-  function toggleSavedCourseFavorite(savedId: string) {
-    setSavedCourses((current) =>
-      current.map((course) =>
-        course.savedId === savedId
-          ? {
-              ...course,
-              favorite: !course.favorite,
-              updatedAt: Date.now(),
-            }
-          : course
-      )
-    );
-  }
+  function deleteRunRecord(runId: string) {
+    const target = runRecords.find((record) => record.runId === runId);
 
-  function canMoveSavedCourse(savedId: string, direction: "up" | "down") {
-    const index = sortedSavedCourses.findIndex(
-      (course) => course.savedId === savedId
-    );
-    const targetIndex = direction === "up" ? index - 1 : index + 1;
-
-    if (index < 0 || targetIndex < 0 || targetIndex >= sortedSavedCourses.length) {
-      return false;
-    }
-
-    return (
-      sortedSavedCourses[index].favorite ===
-      sortedSavedCourses[targetIndex].favorite
-    );
-  }
-
-  function moveSavedCourse(savedId: string, direction: "up" | "down") {
-    if (!canMoveSavedCourse(savedId, direction)) return;
-
-    const index = sortedSavedCourses.findIndex(
-      (course) => course.savedId === savedId
-    );
-    const targetIndex = direction === "up" ? index - 1 : index + 1;
-
-    const source = sortedSavedCourses[index];
-    const target = sortedSavedCourses[targetIndex];
-
-    setSavedCourses((current) =>
-      current.map((course) => {
-        if (course.savedId === source.savedId) {
-          return {
-            ...course,
-            order: target.order,
-            updatedAt: Date.now(),
-          };
-        }
-
-        if (course.savedId === target.savedId) {
-          return {
-            ...course,
-            order: source.order,
-            updatedAt: Date.now(),
-          };
-        }
-
-        return course;
-      })
-    );
-  }
-
-  function deleteSavedCourse(savedId: string) {
-    const target = savedCourses.find((course) => course.savedId === savedId);
-
-    if (target && !window.confirm(`"${target.name}" 기록을 삭제할까요?`)) {
+    if (target && !window.confirm(`"${target.courseName}" 완주 기록을 삭제할까요?`)) {
       return;
     }
 
-    setSavedCourses((current) =>
-      current.filter((course) => course.savedId !== savedId)
+    setRunRecords((current) =>
+      current.filter((record) => record.runId !== runId)
     );
   }
 
@@ -2100,6 +2296,7 @@ export default function RaceMap() {
     setCustomPoints(INITIAL_CUSTOM_POINTS);
     setPlayerMode("gps");
     setActiveCourseMode(mode);
+    setActiveCourseOriginId(null);
     setActiveCourseTurnaround(mode === "outAndBack" ? candidate.endpoint : null);
     setActiveCourse(nextCourse);
     setActivePanel("map");
@@ -2153,79 +2350,92 @@ export default function RaceMap() {
 
   useEffect(() => {
     try {
-      const raw = window.localStorage.getItem(SAVED_COURSES_STORAGE_KEY);
+      const rawCourseLibrary = window.localStorage.getItem(COURSE_LIBRARY_STORAGE_KEY);
+      const rawRunRecords = window.localStorage.getItem(RUN_RECORDS_STORAGE_KEY);
 
-      if (!raw) {
-        setSavedCourses([]);
-        return;
+      let nextCourseLibrary: StoredCourseRecord[] = [];
+      let nextRunRecords: RunRecord[] = [];
+
+      if (rawCourseLibrary) {
+        const parsed = JSON.parse(rawCourseLibrary);
+
+        if (Array.isArray(parsed)) {
+          nextCourseLibrary = parsed
+            .map(validateStoredCourseRecord)
+            .filter((course): course is StoredCourseRecord => Boolean(course));
+        }
       }
 
-      const parsed = JSON.parse(raw);
+      if (rawRunRecords) {
+        const parsed = JSON.parse(rawRunRecords);
 
-      if (!Array.isArray(parsed)) {
-        setSavedCourses([]);
-        return;
+        if (Array.isArray(parsed)) {
+          nextRunRecords = parsed
+            .map(validateRunRecord)
+            .filter((record): record is RunRecord => Boolean(record));
+        }
       }
 
-      setSavedCourses(
-        parsed
-          .map(validateSavedCourseRecord)
-          .filter((course): course is SavedCourseRecord => Boolean(course))
-      );
+      if (!rawCourseLibrary && !rawRunRecords) {
+        const rawLegacyCustomCourses = window.localStorage.getItem(
+          LEGACY_CUSTOM_COURSES_STORAGE_KEY
+        );
+        const rawLegacySavedCourses = window.localStorage.getItem(
+          LEGACY_SAVED_COURSES_STORAGE_KEY
+        );
+
+        const migratedCustomCourses = rawLegacyCustomCourses
+          ? JSON.parse(rawLegacyCustomCourses)
+          : [];
+        const migratedRunSource = rawLegacySavedCourses
+          ? JSON.parse(rawLegacySavedCourses)
+          : [];
+
+        const legacyCustomCourses = Array.isArray(migratedCustomCourses)
+          ? migratedCustomCourses
+              .map(makeStoredCourseFromLegacyCustom)
+              .filter((course): course is StoredCourseRecord => Boolean(course))
+          : [];
+        const { migratedCourses, migratedRuns } = makeLegacyRunMigration(migratedRunSource);
+        const byCourseId = new Map<string, StoredCourseRecord>();
+
+        [...legacyCustomCourses, ...migratedCourses].forEach((course) => {
+          byCourseId.set(course.courseId, course);
+        });
+
+        nextCourseLibrary = Array.from(byCourseId.values());
+        nextRunRecords = migratedRuns;
+      }
+
+      setCourseLibrary(nextCourseLibrary);
+      setRunRecords(nextRunRecords);
     } catch (loadError) {
-      console.warn("Failed to load saved courses:", loadError);
-      setSavedCourses([]);
+      console.warn("Failed to load course library/run records:", loadError);
+      setCourseLibrary([]);
+      setRunRecords([]);
     } finally {
-      setHasLoadedSavedCourses(true);
+      setHasLoadedCourseLibrary(true);
+      setHasLoadedRunRecords(true);
     }
   }, []);
 
   useEffect(() => {
-    if (!hasLoadedSavedCourses) return;
+    if (!hasLoadedRunRecords) return;
 
     window.localStorage.setItem(
-      SAVED_COURSES_STORAGE_KEY,
-      JSON.stringify(savedCourses)
+      RUN_RECORDS_STORAGE_KEY,
+      JSON.stringify(runRecords)
     );
-  }, [savedCourses, hasLoadedSavedCourses]);
+  }, [runRecords, hasLoadedRunRecords]);
 
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(CUSTOM_COURSES_STORAGE_KEY);
-
-      if (!raw) {
-        setCustomCourses([]);
-        return;
-      }
-
-      const parsed = JSON.parse(raw);
-
-      if (!Array.isArray(parsed)) {
-        setCustomCourses([]);
-        return;
-      }
-
-      setCustomCourses(
-        parsed
-          .map(validateCustomCourseRecord)
-          .filter((course): course is CustomCourseRecord => Boolean(course))
-      );
-    } catch (loadError) {
-      console.warn("Failed to load custom courses:", loadError);
-      setCustomCourses([]);
-    } finally {
-      setHasLoadedCustomCourses(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!hasLoadedCustomCourses) return;
+    if (!hasLoadedCourseLibrary) return;
 
     window.localStorage.setItem(
-      CUSTOM_COURSES_STORAGE_KEY,
-      JSON.stringify(customCourses)
+      COURSE_LIBRARY_STORAGE_KEY,
+      JSON.stringify(courseLibrary)
     );
-  }, [customCourses, hasLoadedCustomCourses]);
+  }, [courseLibrary, hasLoadedCourseLibrary]);
 
   useEffect(() => {
     latestGpsProjectionRef.current = gpsTracker.latestProjection;
@@ -2693,7 +2903,7 @@ export default function RaceMap() {
     const trimmedName = customCourseName.trim();
     const finalName =
       trimmedName ||
-      `커스텀 코스 ${sortedCustomCourses.length + 1} · ${
+      `커스텀 코스 ${sortedCourseLibrary.length + 1} · ${
         customPoints.turnaround ? "경유" : "편도"
       }`;
 
@@ -2710,14 +2920,18 @@ export default function RaceMap() {
         name: finalName,
       });
 
+      let storedCustomCourse: StoredCourseRecord | null = null;
+
       if (shouldSaveCustomCourse) {
-        const customRecord = makeCustomCourseRecord({
+        storedCustomCourse = makeStoredCourseRecord({
           course: nextCourse,
           name: finalName,
           turnaround: customPoints.turnaround,
+          source: "custom",
+          courseMode: "custom",
         });
 
-        setCustomCourses((current) => [customRecord, ...current]);
+        setCourseLibrary((current) => [storedCustomCourse!, ...current]);
       }
 
       gpsTracker.stop();
@@ -2731,6 +2945,7 @@ export default function RaceMap() {
       setCustomPoints(INITIAL_CUSTOM_POINTS);
       setCustomCourseName("");
       setActiveCourseMode("custom");
+      setActiveCourseOriginId(storedCustomCourse?.courseId ?? null);
       setActiveCourseTurnaround(customPoints.turnaround);
       setActiveCourse(nextCourse);
       setActivePanel("map");
@@ -3161,36 +3376,83 @@ export default function RaceMap() {
       distanceM: 5080,
       offset: 0.01,
     });
+    const customCourse = makeDevTestCourse({
+      id: `dev-custom-course-${now}`,
+      name: "테스트 저장 커스텀 3K",
+      distanceM: 2880,
+      offset: -0.01,
+    });
 
-    const favoriteRecord: SavedCourseRecord = {
-      ...makeSavedCourseRecord({
-        course: favoriteCourse,
-        name: favoriteCourse.name,
-        courseMode: "outAndBack",
-        turnaround: favoriteCourse.polyline[1],
-        completedAt: now - 60_000,
-        elapsedSec: 18 * 60 + 25,
-      }),
-      savedId: `dev-favorite-record-${now}`,
+    const favoriteStoredCourse = makeStoredCourseRecord({
+      course: favoriteCourse,
+      name: favoriteCourse.name,
+      turnaround: favoriteCourse.polyline[1],
+      source: "completed-import",
+      courseMode: "outAndBack",
+      createdAt: now - 60_000,
+      courseId: `dev-favorite-course-origin-${now}`,
       favorite: true,
-      updatedAt: now,
+    });
+    const historyStoredCourse = makeStoredCourseRecord({
+      course: historyCourse,
+      name: historyCourse.name,
+      turnaround: historyCourse.polyline[1],
+      source: "completed-import",
+      courseMode: "outAndBack",
+      createdAt: now - 3_600_000,
+      courseId: `dev-history-course-origin-${now}`,
+    });
+    const customStoredCourse = makeStoredCourseRecord({
+      course: customCourse,
+      name: customCourse.name,
+      turnaround: [DEFAULT_CENTER[0] - 0.004, DEFAULT_CENTER[1] - 0.002],
+      source: "custom",
+      courseMode: "custom",
+      createdAt: now - 120_000,
+      courseId: `dev-custom-course-origin-${now}`,
+      favorite: true,
+    });
+
+    const favoriteRecord = makeRunRecord({
+      course: favoriteCourse,
+      courseId: favoriteStoredCourse.courseId,
+      courseName: favoriteStoredCourse.name,
+      courseMode: "outAndBack",
+      turnaround: favoriteCourse.polyline[1],
+      completedAt: now - 60_000,
+      elapsedSec: 18 * 60 + 25,
+    });
+    const historyRecord = makeRunRecord({
+      course: historyCourse,
+      courseId: historyStoredCourse.courseId,
+      courseName: historyStoredCourse.name,
+      courseMode: "outAndBack",
+      turnaround: historyCourse.polyline[1],
+      completedAt: now - 3_600_000,
+      elapsedSec: 31 * 60 + 10,
+    });
+
+    const favoriteCourseWithStats: StoredCourseRecord = {
+      ...favoriteStoredCourse,
+      completionCount: 1,
+      lastCompletedAt: favoriteRecord.completedAt,
+      bestElapsedSec: favoriteRecord.elapsedSec,
+    };
+    const historyCourseWithStats: StoredCourseRecord = {
+      ...historyStoredCourse,
+      completionCount: 1,
+      lastCompletedAt: historyRecord.completedAt,
+      bestElapsedSec: historyRecord.elapsedSec,
     };
 
-    const historyRecord: SavedCourseRecord = {
-      ...makeSavedCourseRecord({
-        course: historyCourse,
-        name: historyCourse.name,
-        courseMode: "outAndBack",
-        turnaround: historyCourse.polyline[1],
-        completedAt: now - 3_600_000,
-        elapsedSec: 31 * 60 + 10,
-      }),
-      savedId: `dev-history-record-${now}`,
-      updatedAt: now,
-    };
-
-    setSavedCourses((current) => [favoriteRecord, historyRecord, ...current]);
-    setStatus("테스트 완주 기록 2개를 추가했습니다.");
+    setRunRecords((current) => [favoriteRecord, historyRecord, ...current]);
+    setCourseLibrary((current) => [
+      customStoredCourse,
+      favoriteCourseWithStats,
+      historyCourseWithStats,
+      ...current,
+    ]);
+    setStatus("테스트 저장 코스 3개와 완주 기록 2개를 추가했습니다.");
     setActivePanel("setup");
     setSetupView("myCourses");
   }
@@ -3215,6 +3477,7 @@ export default function RaceMap() {
     setCustomGuide(null);
     setActiveCourseTurnaround(null);
     setActiveCourseMode("custom");
+    setActiveCourseOriginId(null);
     setActiveCourse(shortCourse);
     setPlayerMode("pace");
     setPaceInput("3:00");
@@ -3224,31 +3487,111 @@ export default function RaceMap() {
   }
 
   function handleDevClearLocalRecords() {
-    if (!window.confirm("완주 기록과 커스텀 코스 저장 데이터를 모두 삭제할까요?")) {
+    if (!window.confirm("완주 기록과 저장 코스 데이터를 모두 삭제할까요?")) {
       return;
     }
 
-    setSavedCourses([]);
-    setCustomCourses([]);
+    setRunRecords([]);
+    setCourseLibrary([]);
     setStatus("테스트 저장 데이터를 초기화했습니다.");
   }
 
-  function renderSavedCourseCard(
-    course: SavedCourseRecord,
-    variant: "favorite" | "history" = "history"
+  function renderRunRecordCard(record: RunRecord) {
+    return (
+      <div
+        key={`history-${record.runId}`}
+        role="button"
+        tabIndex={0}
+        onClick={() => applyRunRecord(record)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            applyRunRecord(record);
+          }
+        }}
+        className="cursor-pointer rounded-2xl border border-slate-200 bg-white p-3 shadow-sm transition hover:-translate-y-0.5 hover:border-blue-300 hover:bg-blue-50 hover:shadow-md"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="mb-2 flex flex-wrap items-center gap-1.5">
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">
+                완주 기록
+              </span>
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">
+                {getRunRecordModeLabel(record.courseMode)}
+              </span>
+              <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-700">
+                {(record.distanceM / 1000).toFixed(2)}km
+              </span>
+            </div>
+
+            <div className="text-sm font-black text-slate-900">
+              {record.courseName}
+            </div>
+
+            <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-600">
+              <div className="rounded-xl bg-slate-50 px-2 py-1.5">
+                <div className="text-[10px] font-semibold text-slate-400">
+                  완료 시간
+                </div>
+                <div className="font-bold text-slate-800">
+                  {formatCompletedTime(record.completedAt)}
+                </div>
+              </div>
+              <div className="rounded-xl bg-slate-50 px-2 py-1.5">
+                <div className="text-[10px] font-semibold text-slate-400">
+                  기록
+                </div>
+                <div className="font-bold text-slate-800">
+                  {formatDuration(record.elapsedSec)}
+                </div>
+              </div>
+            </div>
+
+            {record.turnaround && (
+              <div className="mt-2 rounded-xl bg-orange-50 px-2 py-1.5 text-[11px] font-semibold text-orange-700">
+                반환점: {formatPoint(record.turnaround)}
+              </div>
+            )}
+
+            <div className="mt-2 text-[11px] font-bold text-blue-700">
+              기록을 누르면 당시 완주한 코스를 지도에서 볼 수 있습니다.
+            </div>
+          </div>
+
+          <div className="flex shrink-0 flex-col gap-1.5">
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                deleteRunRecord(record.runId);
+              }}
+              className="rounded-xl bg-red-50 px-2 py-2 text-xs font-bold text-red-700 hover:bg-red-100"
+            >
+              삭제
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderStoredCourseCard(
+    course: StoredCourseRecord,
+    variant: "favorite" | "library" = "library"
   ) {
     const isFavoriteCard = variant === "favorite";
 
     return (
       <div
-        key={`${variant}-${course.savedId}`}
+        key={`${variant}-${course.courseId}`}
         role="button"
         tabIndex={0}
-        onClick={() => applySavedCourse(course)}
+        onClick={() => applyStoredCourse(course)}
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
-            applySavedCourse(course);
+            applyStoredCourse(course);
           }
         }}
         className={`cursor-pointer rounded-2xl border p-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
@@ -3265,8 +3608,11 @@ export default function RaceMap() {
                   자주 뛸 코스
                 </span>
               )}
+              <span className="rounded-full bg-purple-50 px-2 py-0.5 text-[10px] font-bold text-purple-700">
+                {getCourseSourceLabel(course.source)}
+              </span>
               <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">
-                {getSavedCourseModeLabel(course.courseMode)}
+                {getStoredCourseModeLabel(course.courseMode)}
               </span>
               <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-700">
                 {(course.distanceM / 1000).toFixed(2)}km
@@ -3284,27 +3630,37 @@ export default function RaceMap() {
               <input
                 value={course.name}
                 onChange={(event) =>
-                  updateSavedCourseName(course.savedId, event.target.value)
+                  updateStoredCourseName(course.courseId, event.target.value)
                 }
                 className="w-full rounded-xl border border-slate-200 bg-white/90 px-3 py-2 text-sm font-bold text-slate-900 outline-none transition focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100"
               />
             </label>
 
-            <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-600">
+            <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-slate-600">
               <div className="rounded-xl bg-slate-50 px-2 py-1.5">
                 <div className="text-[10px] font-semibold text-slate-400">
-                  완료 시간
+                  완주 횟수
                 </div>
                 <div className="font-bold text-slate-800">
-                  {formatCompletedTime(course.completedAt)}
+                  {course.completionCount}회
                 </div>
               </div>
               <div className="rounded-xl bg-slate-50 px-2 py-1.5">
                 <div className="text-[10px] font-semibold text-slate-400">
-                  기록
+                  최근 완주
                 </div>
                 <div className="font-bold text-slate-800">
-                  {formatDuration(course.elapsedSec)}
+                  {course.lastCompletedAt
+                    ? formatCompletedDate(course.lastCompletedAt)
+                    : "없음"}
+                </div>
+              </div>
+              <div className="rounded-xl bg-slate-50 px-2 py-1.5">
+                <div className="text-[10px] font-semibold text-slate-400">
+                  최고 기록
+                </div>
+                <div className="font-bold text-slate-800">
+                  {formatDuration(course.bestElapsedSec)}
                 </div>
               </div>
             </div>
@@ -3318,7 +3674,7 @@ export default function RaceMap() {
             <div className="mt-2 text-[11px] font-bold text-blue-700">
               {isFavoriteCard
                 ? "누르면 지도에서 바로 다시 뛸 수 있습니다."
-                : "기록을 누르면 해당 코스를 지도에서 볼 수 있습니다."}
+                : "저장 코스를 누르면 지도에서 다시 불러옵니다."}
             </div>
           </div>
 
@@ -3327,7 +3683,7 @@ export default function RaceMap() {
               type="button"
               onClick={(event) => {
                 event.stopPropagation();
-                toggleSavedCourseFavorite(course.savedId);
+                toggleStoredCourseFavorite(course.courseId);
               }}
               className={`rounded-xl px-2 py-2 text-xs font-black transition ${
                 course.favorite
@@ -3342,7 +3698,7 @@ export default function RaceMap() {
               type="button"
               onClick={(event) => {
                 event.stopPropagation();
-                deleteSavedCourse(course.savedId);
+                deleteStoredCourse(course.courseId);
               }}
               className="rounded-xl bg-red-50 px-2 py-2 text-xs font-bold text-red-700 hover:bg-red-100"
             >
@@ -3353,6 +3709,7 @@ export default function RaceMap() {
       </div>
     );
   }
+
 
   return (
     <div className="race-root">
@@ -3625,23 +3982,13 @@ export default function RaceMap() {
                     코스
                   </div>
 
-                  <div className="flex gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setSetupView("myCourses")}
-                      className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700"
-                    >
-                      나의 코스
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setSetupView("customCourses")}
-                      className="rounded-lg bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700"
-                    >
-                      커스텀 코스
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSetupView("myCourses")}
+                    className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700"
+                  >
+                    나의 코스
+                  </button>
                 </div>
 
                 <div className="rounded-lg bg-slate-50 p-2 text-xs text-slate-700">
@@ -3852,118 +4199,14 @@ export default function RaceMap() {
 
       {activePanel === "setup" && setupView === "myCourses" && (
         <div className="race-panel race-setup-panel">
-          <div className="mx-auto max-w-[560px] space-y-3">
+          <div className="mx-auto max-w-[560px] space-y-4">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-2xl font-bold text-slate-900">
                   나의 코스
                 </div>
                 <div className="text-xs text-slate-500">
-                  완주한 왕복·편도 코스가 날짜별로 자동 기록됩니다.
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setSetupView("main")}
-                className="rounded-lg bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow"
-              >
-                뒤로
-              </button>
-            </div>
-
-            {sortedSavedCourses.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-300 bg-white/85 p-5 text-center shadow-sm">
-                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-blue-50 text-xl">
-                  🏃
-                </div>
-                <div className="mt-3 text-sm font-black text-slate-900">
-                  아직 완주 기록이 없습니다.
-                </div>
-                <div className="mt-1 text-sm text-slate-600">
-                  왕복 코스, 편도 코스 또는 커스텀 코스를 선택하고 한 번 완주하면
-                  이곳에 기록이 자동으로 쌓입니다.
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setSetupView("main")}
-                  className="mt-4 rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white"
-                >
-                  코스 찾으러 가기
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-5">
-                {favoriteSavedCourses.length > 0 && (
-                  <section className="rounded-3xl border border-yellow-200 bg-gradient-to-br from-yellow-50 via-white to-orange-50 p-3 shadow-sm">
-                    <div className="mb-3 flex items-center justify-between gap-2">
-                      <div>
-                        <div className="flex items-center gap-2 text-sm font-black text-slate-900">
-                          <span>★</span>
-                          <span>자주 뛸 코스</span>
-                        </div>
-                        <div className="text-xs text-slate-600">
-                          즐겨찾기한 완주 코스를 빠르게 다시 불러옵니다.
-                        </div>
-                      </div>
-                      <span className="rounded-full bg-yellow-400 px-2 py-1 text-[11px] font-black text-yellow-950">
-                        {favoriteSavedCourses.length}개
-                      </span>
-                    </div>
-
-                    <div className="space-y-2">
-                      {favoriteSavedCourses.map((course) =>
-                        renderSavedCourseCard(course, "favorite")
-                      )}
-                    </div>
-                  </section>
-                )}
-
-                <section className="space-y-3">
-                  <div className="flex items-end justify-between gap-2 px-1">
-                    <div>
-                      <div className="text-sm font-black text-slate-900">
-                        완주 기록
-                      </div>
-                      <div className="text-xs text-slate-500">
-                        날짜별 전체 히스토리입니다. 즐겨찾기한 코스도 기록에는 그대로 남습니다.
-                      </div>
-                    </div>
-                    <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-bold text-slate-600">
-                      총 {sortedSavedCourses.length}회
-                    </span>
-                  </div>
-
-                  <div className="space-y-4">
-                    {savedCourseGroups.map((group) => (
-                      <div key={group.dateLabel} className="space-y-2">
-                        <div className="sticky top-20 z-10 rounded-full bg-slate-900 px-3 py-1.5 text-xs font-black text-white shadow-sm">
-                          {group.dateLabel}
-                        </div>
-
-                        {group.courses.map((course) =>
-                          renderSavedCourseCard(course, "history")
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {activePanel === "setup" && setupView === "customCourses" && (
-        <div className="race-panel race-setup-panel">
-          <div className="mx-auto max-w-[560px] space-y-3">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-2xl font-bold text-slate-900">
-                  커스텀 코스
-                </div>
-                <div className="text-xs text-slate-500">
-                  직접 만든 코스가 저장됩니다. 완주 기록은 나의 코스에 따로 쌓입니다.
+                  저장 코스와 완주 기록을 분리해 관리합니다.
                 </div>
               </div>
 
@@ -3985,77 +4228,127 @@ export default function RaceMap() {
               새 커스텀 코스 만들기
             </button>
 
-            {sortedCustomCourses.length === 0 ? (
-              <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-600">
-                저장된 커스텀 코스가 없습니다. 새 커스텀 코스를 만들어 저장하세요.
-              </div>
+            {favoriteCourseLibrary.length === 0 ? (
+              <section className="rounded-3xl border border-dashed border-yellow-200 bg-gradient-to-br from-yellow-50 via-white to-orange-50 p-4 text-sm text-slate-700 shadow-sm">
+                <div className="flex items-center gap-2 text-sm font-black text-slate-900">
+                  <span>★</span>
+                  <span>자주 뛸 코스</span>
+                </div>
+                <div className="mt-1 text-xs text-slate-600">
+저장 코스에서 ☆ 버튼을 누르면 이곳에 빠른 실행 코스로 표시됩니다.
+                </div>
+              </section>
             ) : (
-              <div className="space-y-2">
-                {sortedCustomCourses.map((course) => (
-                  <div
-                    key={course.customId}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => applyCustomCourse(course)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        applyCustomCourse(course);
-                      }
-                    }}
-                    className="cursor-pointer rounded-xl border border-slate-200 bg-white p-3 transition hover:border-blue-300 hover:bg-blue-50"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <label
-                          className="block space-y-1"
-                          onClick={(event) => event.stopPropagation()}
-                          onKeyDown={(event) => event.stopPropagation()}
-                        >
-                          <div className="text-[11px] font-semibold text-slate-500">
-                            코스 이름
-                          </div>
-                          <input
-                            value={course.name}
-                            onChange={(event) =>
-                              updateCustomCourseName(course.customId, event.target.value)
-                            }
-                            className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm font-semibold text-slate-900 outline-none focus:border-blue-500"
-                          />
-                        </label>
-
-                        <div className="mt-2 text-xs text-slate-500">
-                          생성일 {formatCompletedDate(course.createdAt)}{" "}
-                          {formatCompletedTime(course.createdAt)} ·{" "}
-                          {(course.distanceM / 1000).toFixed(2)} km
-                        </div>
-
-                        {course.turnaround && (
-                          <div className="mt-1 text-[11px] text-orange-700">
-                            반환점: {formatPoint(course.turnaround)}
-                          </div>
-                        )}
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          deleteCustomCourse(course.customId);
-                        }}
-                        className="shrink-0 rounded-lg bg-red-50 px-2 py-2 text-xs font-semibold text-red-700"
-                      >
-                        삭제
-                      </button>
+              <section className="rounded-3xl border border-yellow-200 bg-gradient-to-br from-yellow-50 via-white to-orange-50 p-3 shadow-sm">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <div>
+                    <div className="flex items-center gap-2 text-sm font-black text-slate-900">
+                      <span>★</span>
+                      <span>자주 뛸 코스</span>
                     </div>
-
-                    <div className="mt-2 text-[11px] font-semibold text-blue-700">
-                      코스를 누르면 지도에서 볼 수 있습니다.
+                    <div className="text-xs text-slate-600">
+즐겨찾기한 저장 코스를 빠르게 다시 불러옵니다.
                     </div>
                   </div>
-                ))}
-              </div>
+                  <span className="rounded-full bg-yellow-400 px-2 py-1 text-[11px] font-black text-yellow-950">
+                    {favoriteCourseLibrary.length}개
+                  </span>
+                </div>
+
+                <div className="space-y-2">
+                  {favoriteCourseLibrary.map((course) =>
+                    renderStoredCourseCard(course, "favorite")
+                  )}
+                </div>
+              </section>
             )}
+
+            <section className="space-y-3">
+              <div className="flex items-end justify-between gap-2 px-1">
+                <div>
+                  <div className="text-sm font-black text-slate-900">
+                    저장 코스
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    직접 저장한 코스와 완주 후 자동 등록된 코스 원본입니다. 이 코스 단위로 즐겨찾기할 수 있습니다.
+                  </div>
+                </div>
+                <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-bold text-slate-600">
+                  총 {sortedCourseLibrary.length}개
+                </span>
+              </div>
+
+              {sortedCourseLibrary.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-white/85 p-4 text-center text-sm text-slate-600 shadow-sm">
+                  아직 저장 코스가 없습니다.
+                  <button
+                    type="button"
+                    onClick={handleStartCustomCourseMode}
+                    disabled={isRunning}
+                    className="mt-3 block w-full rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    직접 코스 만들기
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {sortedCourseLibrary.map((course) =>
+                    renderStoredCourseCard(course, "library")
+                  )}
+                </div>
+              )}
+            </section>
+
+            <section className="space-y-3">
+              <div className="flex items-end justify-between gap-2 px-1">
+                <div>
+                  <div className="text-sm font-black text-slate-900">
+                    완주 기록
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    날짜별 전체 히스토리입니다. 완주 기록은 위 저장 코스 원본에 연결됩니다.
+                  </div>
+                </div>
+                <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-bold text-slate-600">
+                  총 {sortedRunRecords.length}회
+                </span>
+              </div>
+
+              {sortedRunRecords.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-white/85 p-5 text-center shadow-sm">
+                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-blue-50 text-xl">
+                    🏃
+                  </div>
+                  <div className="mt-3 text-sm font-black text-slate-900">
+                    아직 완주 기록이 없습니다.
+                  </div>
+                  <div className="mt-1 text-sm text-slate-600">
+                    왕복 코스, 편도 코스 또는 커스텀 코스를 선택하고 한 번 완주하면 이곳에 기록이 자동으로 쌓입니다.
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSetupView("main")}
+                    className="mt-4 rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white"
+                  >
+                    코스 찾으러 가기
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {runRecordGroups.map((group) => (
+                    <div key={group.dateLabel} className="space-y-2">
+                      <div className="sticky top-20 z-10 rounded-full bg-slate-900 px-3 py-1.5 text-xs font-black text-white shadow-sm">
+                        {group.dateLabel}
+                      </div>
+
+                      {group.records.map((record) =>
+                        renderRunRecordCard(record)
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
           </div>
         </div>
       )}
@@ -4325,7 +4618,7 @@ export default function RaceMap() {
               />
               <span>
                 <span className="block font-bold text-slate-900">
-                  커스텀 코스 탭에 저장
+                  나의 코스에 저장
                 </span>
                 <span className="block text-[11px] text-slate-500">
                   체크를 끄면 이번에 만든 코스만 지도에 적용하고, 목록에는 저장하지 않습니다.
@@ -4385,7 +4678,7 @@ export default function RaceMap() {
 
           <div className="mt-2 text-[11px] text-slate-500">
             지도에서 시작점과 종료지점을 선택하세요. 반환점을 추가하면 왕복 또는 경유
-            코스로 만들 수 있습니다. 저장 옵션을 켜면 커스텀 코스 탭에서 다시 불러올 수
+            코스로 만들 수 있습니다. 저장 옵션을 켜면 나의 코스에서 다시 불러올 수
             있습니다.
           </div>
         </div>
