@@ -2220,17 +2220,6 @@ export default function RaceMap() {
     setStatus(`${record.courseName} 완주 기록 코스를 지도에 표시했습니다.`);
   }
 
-  function deleteRunRecord(runId: string) {
-    const target = runRecords.find((record) => record.runId === runId);
-
-    if (target && !window.confirm(`"${target.courseName}" 완주 기록을 삭제할까요?`)) {
-      return;
-    }
-
-    setRunRecords((current) =>
-      current.filter((record) => record.runId !== runId)
-    );
-  }
   function updateRunRecordName(runId: string, name: string) {
     setRunRecords((current) =>
       current.map((record) =>
@@ -2242,6 +2231,18 @@ export default function RaceMap() {
             }
           : record
       )
+    );
+  }
+
+  function deleteRunRecord(runId: string) {
+    const target = runRecords.find((record) => record.runId === runId);
+
+    if (target && !window.confirm(`"${target.courseName}" 완주 기록을 삭제할까요?`)) {
+      return;
+    }
+
+    setRunRecords((current) =>
+      current.filter((record) => record.runId !== runId)
     );
   }
 
@@ -4016,14 +4017,14 @@ export default function RaceMap() {
             </div>
           ) : (
             <div className="mx-auto max-w-[560px] space-y-3">
-              <div className="rounded-2xl bg-slate-900 p-4 text-white shadow-lg">
-                <div className="text-xs font-semibold uppercase tracking-[0.22em] text-blue-200">
+              <div className="overflow-hidden rounded-[28px] border border-white/50 bg-slate-950/85 p-5 text-white shadow-2xl shadow-slate-900/20 backdrop-blur">
+                <div className="text-xs font-semibold uppercase tracking-[0.26em] text-emerald-200">
                   PaceRace
                 </div>
-                <div className="mt-2 text-2xl font-black leading-tight">
+                <div className="mt-3 text-3xl font-black leading-tight tracking-[-0.04em]">
                   오늘 어디를 뛸까요?
                 </div>
-                <div className="mt-1 text-sm font-medium text-slate-200">
+                <div className="mt-2 max-w-[420px] text-sm font-semibold leading-relaxed text-slate-100">
                   현재 위치에서 바로 뛸 수 있는 3K·5K·10K 러닝 코스를 찾아드립니다.
                 </div>
               </div>
@@ -4894,18 +4895,36 @@ export default function RaceMap() {
           position: absolute;
           inset: 0;
           z-index: 20;
+          overflow: hidden;
           background:
+            linear-gradient(
+              135deg,
+              rgba(248, 250, 252, 0.94) 0%,
+              rgba(239, 246, 255, 0.82) 44%,
+              rgba(236, 253, 245, 0.78) 100%
+            ),
             radial-gradient(
-              circle at top left,
-              rgba(59, 130, 246, 0.13),
+              circle at 18% 8%,
+              rgba(255, 255, 255, 0.86),
               transparent 34%
             ),
-            radial-gradient(
-              circle at bottom right,
-              rgba(34, 197, 94, 0.12),
-              transparent 30%
-            ),
-            #f8fafc;
+            url("https://images.pexels.com/photos/32711610/pexels-photo-32711610.jpeg?auto=compress&cs=tinysrgb&w=1920");
+          background-size: cover;
+          background-position: center;
+        }
+
+        .setup-background::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          background:
+            linear-gradient(
+              180deg,
+              rgba(255, 255, 255, 0.28),
+              rgba(255, 255, 255, 0.74) 72%,
+              rgba(255, 255, 255, 0.88) 100%
+            );
+          backdrop-filter: blur(1.5px);
         }
 
         .race-map {
@@ -4957,6 +4976,10 @@ export default function RaceMap() {
           background: transparent;
           padding: calc(max(8px, env(safe-area-inset-top)) + 58px) 14px
             max(18px, env(safe-area-inset-bottom)) 14px;
+        }
+
+        .race-setup-panel > div {
+          position: relative;
         }
 
         .race-map-hud,
