@@ -4895,12 +4895,24 @@ export default function RaceMap() {
           position: absolute;
           inset: 0;
           z-index: 20;
+          overflow: hidden;
+          background-image: url("/backgrounds/runner-bg.jpg");
+          background-size: cover;
+          background-position: center 42%;
+          background-repeat: no-repeat;
+        }
+        
+        .setup-background::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: 1;
           background:
             linear-gradient(
               135deg,
-              rgba(248, 250, 252, 0.88),
-              rgba(239, 246, 255, 0.78),
-              rgba(236, 253, 245, 0.78)
+              rgba(248, 250, 252, 0.62),
+              rgba(239, 246, 255, 0.46),
+              rgba(236, 253, 245, 0.50)
             ),
             radial-gradient(
               circle at top left,
@@ -4909,13 +4921,11 @@ export default function RaceMap() {
             ),
             radial-gradient(
               circle at bottom right,
-              rgba(34, 197, 94, 0.14),
-              transparent 30%
-            ),
-            url("/backgrounds/runner-bg.jpg");
-          background-size: cover;
-          background-position: center center;
-          background-repeat: no-repeat;
+              rgba(34, 197, 94, 0.16),
+              transparent 32%
+            );
+          backdrop-filter: blur(1.2px);
+          pointer-events: none;
         }
 
         .setup-background::after {
