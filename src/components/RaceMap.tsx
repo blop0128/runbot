@@ -2281,6 +2281,9 @@ export default function RaceMap() {
     return getPolylineLengthM(drawnRoutePoints);
   }, [drawnRoutePoints]);
 
+  const isGeneratingAnyCourse =
+    isGeneratingAutoLoop || isGeneratingOneWay || isGeneratingDrawRouteCandidates;
+
   const canGenerateDrawnRouteCandidates =
     drawnRoutePoints.length >= 2 && !isGeneratingAnyCourse;
 
@@ -4899,8 +4902,6 @@ export default function RaceMap() {
   const isGpsBlockedBySecurity =
     playerMode === "gps" && isSecureContextState === false;
 
-  const isGeneratingAnyCourse =
-    isGeneratingAutoLoop || isGeneratingOneWay || isGeneratingDrawRouteCandidates;
   const isDrawnCandidatePanel =
     autoLoopAllCandidates.some((candidate) =>
       candidate.candidateId.startsWith("draw-route-candidate")
