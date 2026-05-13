@@ -4931,7 +4931,7 @@ export default function RaceMap() {
           inset: 0;
           z-index: 20;
           overflow: hidden;
-          background-image: url("/backgrounds/runner-bg.jpg");
+          background-image: url("/backgrounds/runner-bg-v2.jpg");
           background-size: cover;
           background-position: center 42%;
           background-repeat: no-repeat;
