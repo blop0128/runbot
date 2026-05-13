@@ -1227,6 +1227,65 @@ export default function RaceMap() {
     }
   }
 
+  async function handleUseCurrentLocationAsCustomStart() {
+    if (isRunning || isGeneratingCustomCourse) return;
+
+    if (isSecureContextState === false) {
+      const message = "현재 위치 기능은 HTTPS 환경 또는 localhost에서 사용해야 합니다.";
+      setCustomCourseError(message);
+      setMapLocationError(message);
+      setStatus("현재 위치 시작점 설정 실패");
+      return;
+    }
+
+    if (!("geolocation" in navigator)) {
+      const message = "이 브라우저는 위치 기능을 지원하지 않습니다.";
+      setCustomCourseError(message);
+      setMapLocationError(message);
+      setStatus("현재 위치 시작점 설정 실패");
+      return;
+    }
+
+    try {
+      setIsCenteringOnCurrentLocation(true);
+      setCustomCourseError(null);
+      setMapLocationError(null);
+      setStatus("현재 위치를 시작지점으로 설정하는 중...");
+
+      const position = await getCurrentPosition();
+      const nextLocation: LngLat = [
+        position.coords.longitude,
+        position.coords.latitude,
+      ];
+
+      setCurrentMapLocation(nextLocation);
+      setCurrentMapLocationAccuracyM(position.coords.accuracy);
+
+      currentLocationMarkerRef.current?.setLngLat(nextLocation);
+      currentLocationMarkerRef.current?.getElement().style.setProperty(
+        "display",
+        "flex"
+      );
+
+      mapRef.current?.flyTo({
+        center: nextLocation,
+        zoom: 16,
+        duration: 700,
+      });
+
+      selectCustomPoint("start", nextLocation);
+      startMapLocationWatch();
+      setStatus("현재 위치를 시작지점으로 설정했습니다. 종료지점을 선택하세요.");
+    } catch (rawError) {
+      const message = getPositionErrorMessage(rawError);
+      setCustomCourseError(message);
+      setMapLocationError(message);
+      setStatus("현재 위치 시작점 설정 실패");
+    } finally {
+      setIsCenteringOnCurrentLocation(false);
+    }
+  }
+
   function fitMapToCourse(course: Course) {
     const map = mapRef.current;
     if (!map || !isRunnableCourse(course)) return;
@@ -3778,6 +3837,26 @@ export default function RaceMap() {
             >
               취소
             </button>
+          </div>
+
+          <div className="mb-3 rounded-lg bg-blue-50 p-2">
+            <button
+              type="button"
+              onClick={handleUseCurrentLocationAsCustomStart}
+              disabled={
+                isRunning ||
+                isGeneratingCustomCourse ||
+                isCenteringOnCurrentLocation ||
+                Boolean(customPoints.finish)
+              }
+              className="w-full rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              {isCenteringOnCurrentLocation ? "현재 위치 확인 중..." : "내 위치를 시작점으로"}
+            </button>
+            <div className="mt-1 text-[11px] text-blue-700">
+              GPS 상 현재 위치를 커스텀 코스의 시작지점으로 설정합니다. 종료지점이
+              이미 선택된 경우에는 전체 초기화 후 다시 설정하세요.
+            </div>
           </div>
 
           <div className="space-y-2 rounded-lg bg-slate-50 p-2 text-xs text-slate-700">
