@@ -4117,7 +4117,7 @@ export default function RaceMap() {
                       type="button"
                       onClick={handleGenerateOutAndBackCandidates}
                       disabled={isRunning || isGeneratingAnyCourse}
-                      className="course-action-button course-action-outback px-3 py-2 text-xs disabled:cursor-not-allowed"
+                      className="course-action-button course-action-primary px-3 py-2 text-xs disabled:cursor-not-allowed"
                     >
                       {isGeneratingAutoLoop ? "왕복 코스 찾는 중..." : "왕복 코스 찾기"}
                     </button>
@@ -4126,7 +4126,7 @@ export default function RaceMap() {
                       type="button"
                       onClick={handleGenerateOneWayCandidates}
                       disabled={isRunning || isGeneratingAnyCourse}
-                      className="course-action-button course-action-oneway px-3 py-2 text-xs disabled:cursor-not-allowed"
+                      className="course-action-button course-action-primary px-3 py-2 text-xs disabled:cursor-not-allowed"
                     >
                       {isGeneratingOneWay ? "편도 코스 찾는 중..." : "편도 코스 찾기"}
                     </button>
@@ -4142,7 +4142,7 @@ export default function RaceMap() {
                     type="button"
                     onClick={handleStartCustomCourseMode}
                     disabled={isRunning}
-                    className="course-action-button course-action-custom px-3 py-2 text-sm disabled:cursor-not-allowed"
+                    className="course-action-button course-action-primary px-3 py-2 text-sm disabled:cursor-not-allowed"
                   >
                     직접 코스 만들기
                   </button>
@@ -5175,18 +5175,18 @@ export default function RaceMap() {
           overflow: hidden;
           width: 100%;
           min-height: 42px;
-          border: 1px solid rgba(255, 255, 255, 0.38);
+          border: 1px solid rgba(255, 255, 255, 0.30);
           border-radius: 16px;
-          color: rgba(255, 255, 255, 0.98);
+          color: rgba(255, 255, 255, 0.96);
           font-weight: 900;
           letter-spacing: -0.01em;
-          text-shadow: 0 1px 1px rgba(15, 23, 42, 0.18);
-          backdrop-filter: blur(18px) saturate(145%);
-          -webkit-backdrop-filter: blur(18px) saturate(145%);
+          text-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+          backdrop-filter: blur(20px) saturate(132%);
+          -webkit-backdrop-filter: blur(20px) saturate(132%);
           box-shadow:
-            0 12px 28px rgba(15, 23, 42, 0.20),
-            inset 0 1px 0 rgba(255, 255, 255, 0.32),
-            inset 0 -1px 0 rgba(15, 23, 42, 0.12);
+            0 12px 26px rgba(15, 23, 42, 0.18),
+            inset 0 1px 0 rgba(255, 255, 255, 0.24),
+            inset 0 -1px 0 rgba(0, 0, 0, 0.18);
           transition:
             transform 140ms ease,
             filter 140ms ease,
@@ -5202,65 +5202,47 @@ export default function RaceMap() {
           background:
             linear-gradient(
               180deg,
-              rgba(255, 255, 255, 0.24),
-              rgba(255, 255, 255, 0.06) 42%,
+              rgba(255, 255, 255, 0.18),
+              rgba(255, 255, 255, 0.05) 42%,
               transparent 72%
             );
           pointer-events: none;
         }
 
         .course-action-button:hover:not(:disabled) {
-          filter: brightness(1.04) saturate(1.04);
-          border-color: rgba(255, 255, 255, 0.52);
+          filter: brightness(1.06) saturate(1.02);
+          border-color: rgba(255, 255, 255, 0.44);
           box-shadow:
-            0 16px 34px rgba(15, 23, 42, 0.24),
-            inset 0 1px 0 rgba(255, 255, 255, 0.38),
-            inset 0 -1px 0 rgba(15, 23, 42, 0.14);
+            0 16px 32px rgba(15, 23, 42, 0.22),
+            inset 0 1px 0 rgba(255, 255, 255, 0.30),
+            inset 0 -1px 0 rgba(0, 0, 0, 0.18);
         }
 
         .course-action-button:active:not(:disabled) {
           transform: translateY(1px) scale(0.982);
-          filter: brightness(0.96) saturate(0.98);
+          filter: brightness(0.94) saturate(0.96);
           box-shadow:
-            0 7px 18px rgba(15, 23, 42, 0.24),
-            inset 0 2px 10px rgba(15, 23, 42, 0.18),
-            inset 0 1px 0 rgba(255, 255, 255, 0.20);
+            0 7px 16px rgba(15, 23, 42, 0.24),
+            inset 0 2px 10px rgba(0, 0, 0, 0.24),
+            inset 0 1px 0 rgba(255, 255, 255, 0.14);
         }
 
         .course-action-button:disabled {
-          border-color: rgba(255, 255, 255, 0.22);
-          background: rgba(203, 213, 225, 0.38) !important;
-          color: rgba(255, 255, 255, 0.66);
+          border-color: rgba(255, 255, 255, 0.20);
+          background: rgba(71, 85, 105, 0.30) !important;
+          color: rgba(255, 255, 255, 0.58);
           box-shadow:
-            inset 0 1px 0 rgba(255, 255, 255, 0.18),
-            0 8px 20px rgba(15, 23, 42, 0.08);
+            inset 0 1px 0 rgba(255, 255, 255, 0.12),
+            0 8px 18px rgba(15, 23, 42, 0.08);
           text-shadow: none;
         }
 
-        .course-action-outback {
+        .course-action-primary {
           background:
             linear-gradient(
               135deg,
-              rgba(16, 185, 129, 0.84),
-              rgba(5, 150, 105, 0.66)
-            );
-        }
-
-        .course-action-oneway {
-          background:
-            linear-gradient(
-              135deg,
-              rgba(99, 102, 241, 0.86),
-              rgba(79, 70, 229, 0.66)
-            );
-        }
-
-        .course-action-custom {
-          background:
-            linear-gradient(
-              135deg,
-              rgba(37, 99, 235, 0.80),
-              rgba(29, 78, 216, 0.58)
+              rgba(17, 24, 39, 0.78),
+              rgba(68, 52, 40, 0.54)
             );
         }
 
