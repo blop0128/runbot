@@ -29,6 +29,7 @@ type ActivePanel = "setup" | "map";
 type SetupView = "main" | "myCourses";
 type CandidateMode = "outAndBack" | "oneWay";
 type CustomRouteMode = "oneWay" | "outAndBack";
+type DrawRouteInteractionMode = "draw" | "move";
 type BottomSheetKind = "candidate" | "mapHud" | "custom" | "draw";
 type CustomPointStep = "start" | "turnaround" | "finish";
 type CustomGuide =
@@ -135,6 +136,7 @@ const EARTH_RADIUS_M = 6_371_000;
 const DIRECTIONS_PROFILE = "mapbox/walking";
 const FEEDBACK_FORM_URL = "";
 const TEST_PANEL_QUERY_PARAM = "devtools";
+const COURSE_SEARCH_ABORT_MESSAGE = "COURSE_SEARCH_ABORTED";
 
 const DEFAULT_CENTER: LngLat = [126.9205, 37.5297];
 
@@ -269,11 +271,32 @@ function makeDirectionsUrl(
   return `https://api.mapbox.com/directions/v5/${DIRECTIONS_PROFILE}/${coordinates}?${params.toString()}`;
 }
 
-async function fetchWalkingRoute(points: LngLat[], token: string): Promise<{
+function throwIfCourseSearchAborted(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw new Error(COURSE_SEARCH_ABORT_MESSAGE);
+  }
+}
+
+function isCourseSearchAbortError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "AbortError" || error.message === COURSE_SEARCH_ABORT_MESSAGE)
+  );
+}
+
+async function fetchWalkingRoute(
+  points: LngLat[],
+  token: string,
+  signal?: AbortSignal
+): Promise<{
   distanceM: number;
   polyline: LngLat[];
 }> {
-  const response = await fetch(makeDirectionsUrl(points, token));
+  throwIfCourseSearchAborted(signal);
+
+  const response = await fetch(makeDirectionsUrl(points, token),
+    signal ? { signal } : undefined
+  );
 
   if (!response.ok) {
     throw new Error(`Mapbox Directions 요청 실패: HTTP ${response.status}`);
@@ -296,14 +319,19 @@ async function fetchWalkingRoute(points: LngLat[], token: string): Promise<{
 async function fetchWalkingRouteVariants(
   points: LngLat[],
   token: string,
-  alternatives = false
+  alternatives = false,
+  signal?: AbortSignal
 ): Promise<
   Array<{
     distanceM: number;
     polyline: LngLat[];
   }>
 > {
-  const response = await fetch(makeDirectionsUrl(points, token, alternatives));
+  throwIfCourseSearchAborted(signal);
+
+  const response = await fetch(makeDirectionsUrl(points, token, alternatives),
+    signal ? { signal } : undefined
+  );
 
   if (!response.ok) {
     throw new Error(`Mapbox Directions 요청 실패: HTTP ${response.status}`);
@@ -358,12 +386,15 @@ async function generateOneWayCourseCandidates({
   token,
   targetDistanceM,
   toleranceM = DEFAULT_DISTANCE_TOLERANCE_M,
+  signal,
 }: {
   origin: LngLat;
   token: string;
   targetDistanceM: number;
   toleranceM?: number;
+  signal?: AbortSignal;
 }): Promise<AutoLoopCourseCandidate[]> {
+  throwIfCourseSearchAborted(signal);
   if (!token) {
     throw new Error("Mapbox token이 없습니다.");
   }
@@ -394,13 +425,16 @@ async function generateOneWayCourseCandidates({
   });
 
   for (const attempt of attempts) {
+    throwIfCourseSearchAborted(signal);
+
     const key = makeCandidateKey(attempt.endpoint);
 
     if (seen.has(key)) continue;
     seen.add(key);
 
     try {
-      const route = await fetchWalkingRoute([origin, attempt.endpoint], token);
+      const route = await fetchWalkingRoute([origin, attempt.endpoint], token, signal);
+      throwIfCourseSearchAborted(signal);
 
       if (route.polyline.length < 2 || route.distanceM <= 0) {
         continue;
@@ -424,6 +458,10 @@ async function generateOneWayCourseCandidates({
         polyline: route.polyline,
       });
     } catch (error) {
+      if (isCourseSearchAbortError(error)) {
+        throw error;
+      }
+
       console.warn("Failed to generate one-way candidate:", {
         attempt,
         error,
@@ -527,10 +565,13 @@ function getDrawRouteAttempts(points: LngLat[]): LngLat[][] {
 async function generateDrawnRouteCandidates({
   drawnPoints,
   token,
+  signal,
 }: {
   drawnPoints: LngLat[];
   token: string;
+  signal?: AbortSignal;
 }): Promise<AutoLoopCourseCandidate[]> {
+  throwIfCourseSearchAborted(signal);
   if (!token) {
     throw new Error("Mapbox token이 없습니다.");
   }
@@ -550,9 +591,17 @@ async function generateDrawnRouteCandidates({
   const candidates: AutoLoopCourseCandidate[] = [];
 
   for (const attempt of attempts) {
+    throwIfCourseSearchAborted(signal);
+
     try {
       const alternatives = attempt.length === 2;
-      const routes = await fetchWalkingRouteVariants(attempt, token, alternatives);
+      const routes = await fetchWalkingRouteVariants(
+        attempt,
+        token,
+        alternatives,
+        signal
+      );
+      throwIfCourseSearchAborted(signal);
 
       routes.forEach((route) => {
         const key = makeDrawRouteCandidateKey(route);
@@ -576,6 +625,10 @@ async function generateDrawnRouteCandidates({
         });
       });
     } catch (error) {
+      if (isCourseSearchAbortError(error)) {
+        throw error;
+      }
+
       console.warn("Failed to generate drawn route candidate:", {
         attempt,
         error,
@@ -1594,9 +1647,18 @@ export default function RaceMap() {
   const latestGpsProjectionRef = useRef<LatestGpsProjection | null>(null);
   const elevationRunIdRef = useRef(0);
   const completionRecordedForRunRef = useRef(false);
+  const courseSearchAbortControllerRef = useRef<AbortController | null>(null);
+  const courseSearchRunIdRef = useRef(0);
   const drawRoutePointerRef = useRef<{
     pointerId: number;
     hasMoved: boolean;
+  } | null>(null);
+  const drawRouteActivePointersRef = useRef<
+    Map<number, { clientX: number; clientY: number }>
+  >(new Map());
+  const drawRoutePinchRef = useRef<{
+    startDistancePx: number;
+    startZoom: number;
   } | null>(null);
   const drawnRoutePointsRef = useRef<LngLat[]>([]);
   const bottomSheetDragRef = useRef<{
@@ -1697,6 +1759,8 @@ export default function RaceMap() {
 
   const [isDrawRouteMode, setIsDrawRouteMode] = useState(false);
   const [isDrawPanelCollapsed, setIsDrawPanelCollapsed] = useState(false);
+  const [drawRouteInteractionMode, setDrawRouteInteractionMode] =
+    useState<DrawRouteInteractionMode>("draw");
   const [drawnRoutePoints, setDrawnRoutePoints] = useState<LngLat[]>([]);
   const [isDrawingRoute, setIsDrawingRoute] = useState(false);
   const [isGeneratingDrawRouteCandidates, setIsGeneratingDrawRouteCandidates] =
@@ -2170,6 +2234,46 @@ export default function RaceMap() {
     setAutoLoopError(null);
     setIsAutoLoopPanelCollapsed(false);
     clearAutoLoopCandidateOverlay();
+  }
+
+  function beginCourseSearch() {
+    courseSearchAbortControllerRef.current?.abort();
+
+    const controller = new AbortController();
+    courseSearchAbortControllerRef.current = controller;
+    courseSearchRunIdRef.current += 1;
+
+    return {
+      runId: courseSearchRunIdRef.current,
+      signal: controller.signal,
+    };
+  }
+
+  function isCurrentCourseSearch(runId: number, signal?: AbortSignal): boolean {
+    return courseSearchRunIdRef.current === runId && !signal?.aborted;
+  }
+
+  function finishCourseSearch(runId: number) {
+    if (courseSearchRunIdRef.current === runId) {
+      courseSearchAbortControllerRef.current = null;
+    }
+  }
+
+  function handleStopCourseSearch() {
+    if (!isGeneratingAutoLoop && !isGeneratingOneWay && !isGeneratingDrawRouteCandidates) {
+      return;
+    }
+
+    courseSearchAbortControllerRef.current?.abort();
+    courseSearchAbortControllerRef.current = null;
+    courseSearchRunIdRef.current += 1;
+
+    setIsGeneratingAutoLoop(false);
+    setIsGeneratingOneWay(false);
+    setIsGeneratingDrawRouteCandidates(false);
+    setAutoLoopError(null);
+    setDrawRouteError(null);
+    setStatus("코스 탐색을 중지했습니다.");
   }
 
   function computeElevationSummariesForCandidates(
@@ -2840,6 +2944,10 @@ export default function RaceMap() {
   }
 
   function handleCloseAutoLoopPanel() {
+    if (isGeneratingAutoLoop || isGeneratingOneWay || isGeneratingDrawRouteCandidates) {
+      handleStopCourseSearch();
+    }
+
     clearAutoLoopCandidates();
     setStatus(`${getCandidateModeLabel(candidateMode)} 후보 보기를 닫았습니다.`);
   }
@@ -3081,6 +3189,8 @@ export default function RaceMap() {
         cancelAnimationFrame(animationFrameRef.current);
       }
 
+      courseSearchAbortControllerRef.current?.abort();
+      courseSearchAbortControllerRef.current = null;
       stopMapLocationWatch();
       gpsTracker.stop();
       clearCustomPointMarkers();
@@ -3457,14 +3567,18 @@ export default function RaceMap() {
   }
 
   function getLngLatFromPointerEvent(event: PointerEvent<HTMLElement>): LngLat | null {
+    return getLngLatFromClientPoint(event.clientX, event.clientY);
+  }
+
+  function getLngLatFromClientPoint(clientX: number, clientY: number): LngLat | null {
     const map = mapRef.current;
     const container = mapContainerRef.current;
 
     if (!map || !container) return null;
 
     const rect = container.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
 
     if (x < 0 || y < 0 || x > rect.width || y > rect.height) {
       return null;
@@ -3472,6 +3586,37 @@ export default function RaceMap() {
 
     const point = map.unproject([x, y]);
     return [point.lng, point.lat];
+  }
+
+  function getPointerDistancePx(
+    a: { clientX: number; clientY: number },
+    b: { clientX: number; clientY: number }
+  ): number {
+    return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+  }
+
+  function getFirstTwoDrawPointers(): Array<{ clientX: number; clientY: number }> {
+    return Array.from(drawRouteActivePointersRef.current.values()).slice(0, 2);
+  }
+
+  function clearDrawRoutePointerSession() {
+    drawRoutePointerRef.current = null;
+    drawRouteActivePointersRef.current.clear();
+    drawRoutePinchRef.current = null;
+    setIsDrawingRoute(false);
+  }
+
+  function handleSetDrawRouteInteractionMode(mode: DrawRouteInteractionMode) {
+    if (isGeneratingDrawRouteCandidates) return;
+
+    clearDrawRoutePointerSession();
+    setDrawRouteInteractionMode(mode);
+    setDrawRouteError(null);
+    setStatus(
+      mode === "draw"
+        ? "그리기 모드: 한 손가락으로 코스를 그리고, 두 손가락으로 확대/축소할 수 있습니다."
+        : "지도 이동 모드: 지도를 자유롭게 움직인 뒤 그리기 모드로 돌아오세요."
+    );
   }
 
   function appendDrawnRoutePoint(point: LngLat) {
@@ -3500,24 +3645,26 @@ export default function RaceMap() {
     setCustomCourseError(null);
     setIsDrawRouteMode(true);
     setIsDrawPanelCollapsed(false);
+    setDrawRouteInteractionMode("draw");
     setDrawnRoutePoints([]);
     drawnRoutePointsRef.current = [];
     setDrawRouteError(null);
+    clearDrawRoutePointerSession();
     clearDrawRouteOverlay();
     setIsLeaderboardOpen(false);
     setActivePanel("map");
     setSetupView("main");
-    setStatus("코스 그리기 모드: 지도 위를 손가락으로 그려 방향을 알려주세요.");
+    setStatus("코스 그리기 모드: 한 손가락으로 그리고, 두 손가락으로 확대/축소할 수 있습니다.");
   }
 
   function handleCancelDrawRouteMode() {
     setIsDrawRouteMode(false);
     setIsDrawPanelCollapsed(false);
+    setDrawRouteInteractionMode("draw");
     setDrawnRoutePoints([]);
     drawnRoutePointsRef.current = [];
     setDrawRouteError(null);
-    setIsDrawingRoute(false);
-    drawRoutePointerRef.current = null;
+    clearDrawRoutePointerSession();
     clearDrawRouteOverlay();
     setStatus("코스 그리기 모드를 종료했습니다.");
   }
@@ -3526,21 +3673,88 @@ export default function RaceMap() {
     setDrawnRoutePoints([]);
     drawnRoutePointsRef.current = [];
     setDrawRouteError(null);
-    setIsDrawingRoute(false);
-    drawRoutePointerRef.current = null;
+    clearDrawRoutePointerSession();
     clearDrawRouteOverlay();
     setStatus("그린 선을 초기화했습니다. 다시 지도 위에 그려주세요.");
+  }
+
+  function beginDrawRoutePinchZoom() {
+    const map = mapRef.current;
+    const [first, second] = getFirstTwoDrawPointers();
+
+    if (!map || !first || !second) return;
+
+    const startDistancePx = getPointerDistancePx(first, second);
+
+    if (startDistancePx <= 0) return;
+
+    drawRoutePinchRef.current = {
+      startDistancePx,
+      startZoom: map.getZoom(),
+    };
+
+    drawRoutePointerRef.current = null;
+    setIsDrawingRoute(false);
+    setIsDrawPanelCollapsed(true);
+  }
+
+  function updateDrawRoutePinchZoom() {
+    const map = mapRef.current;
+    const [first, second] = getFirstTwoDrawPointers();
+
+    if (!map || !first || !second) return;
+
+    if (!drawRoutePinchRef.current) {
+      beginDrawRoutePinchZoom();
+    }
+
+    const pinch = drawRoutePinchRef.current;
+    if (!pinch) return;
+
+    const nextDistancePx = getPointerDistancePx(first, second);
+    if (nextDistancePx <= 0) return;
+
+    const scale = Math.max(0.35, Math.min(3.5, nextDistancePx / pinch.startDistancePx));
+    const nextZoom = Math.max(
+      map.getMinZoom(),
+      Math.min(map.getMaxZoom(), pinch.startZoom + Math.log2(scale))
+    );
+    const midpointClientX = (first.clientX + second.clientX) / 2;
+    const midpointClientY = (first.clientY + second.clientY) / 2;
+    const around = getLngLatFromClientPoint(midpointClientX, midpointClientY);
+
+    if (around) {
+      map.zoomTo(nextZoom, {
+        around,
+        duration: 0,
+      });
+    } else {
+      map.zoomTo(nextZoom, { duration: 0 });
+    }
   }
 
   function handleDrawRoutePointerDown(event: PointerEvent<HTMLElement>) {
     if (!isDrawRouteMode || isGeneratingDrawRouteCandidates) return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
 
+    event.preventDefault();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    drawRouteActivePointersRef.current.set(event.pointerId, {
+      clientX: event.clientX,
+      clientY: event.clientY,
+    });
+
+    if (drawRouteActivePointersRef.current.size >= 2) {
+      beginDrawRoutePinchZoom();
+      setStatus("두 손가락으로 지도를 확대/축소하는 중입니다.");
+      return;
+    }
+
+    if (drawRouteInteractionMode !== "draw") return;
+
     const point = getLngLatFromPointerEvent(event);
     if (!point) return;
 
-    event.preventDefault();
-    event.currentTarget.setPointerCapture?.(event.pointerId);
     drawRoutePointerRef.current = {
       pointerId: event.pointerId,
       hasMoved: false,
@@ -3556,23 +3770,51 @@ export default function RaceMap() {
   }
 
   function handleDrawRoutePointerMove(event: PointerEvent<HTMLElement>) {
+    if (!drawRouteActivePointersRef.current.has(event.pointerId)) return;
+
+    event.preventDefault();
+    drawRouteActivePointersRef.current.set(event.pointerId, {
+      clientX: event.clientX,
+      clientY: event.clientY,
+    });
+
+    if (drawRouteActivePointersRef.current.size >= 2) {
+      updateDrawRoutePinchZoom();
+      return;
+    }
+
     const draw = drawRoutePointerRef.current;
     if (!draw || draw.pointerId !== event.pointerId) return;
 
     const point = getLngLatFromPointerEvent(event);
     if (!point) return;
 
-    event.preventDefault();
     draw.hasMoved = true;
     appendDrawnRoutePoint(point);
   }
 
   function handleDrawRoutePointerEnd(event: PointerEvent<HTMLElement>) {
     const draw = drawRoutePointerRef.current;
-    if (!draw || draw.pointerId !== event.pointerId) return;
+    const wasDrawingPointer = Boolean(draw && draw.pointerId === event.pointerId);
+    const wasPinching = Boolean(drawRoutePinchRef.current);
 
-    event.preventDefault();
-    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    if (drawRouteActivePointersRef.current.has(event.pointerId)) {
+      event.preventDefault();
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+      drawRouteActivePointersRef.current.delete(event.pointerId);
+    }
+
+    if (wasPinching) {
+      if (drawRouteActivePointersRef.current.size < 2) {
+        drawRoutePinchRef.current = null;
+        setIsDrawPanelCollapsed(false);
+        setStatus("지도 확대/축소 완료 · 그리기 모드에서 계속 그릴 수 있습니다.");
+      }
+      return;
+    }
+
+    if (!wasDrawingPointer || !draw) return;
+
     drawRoutePointerRef.current = null;
     setIsDrawingRoute(false);
     setIsDrawPanelCollapsed(false);
@@ -3587,18 +3829,25 @@ export default function RaceMap() {
   }
 
   function handleDrawRoutePointerCancel(event: PointerEvent<HTMLElement>) {
-    const draw = drawRoutePointerRef.current;
-    if (draw && draw.pointerId === event.pointerId) {
+    if (drawRouteActivePointersRef.current.has(event.pointerId)) {
       event.currentTarget.releasePointerCapture?.(event.pointerId);
+      drawRouteActivePointersRef.current.delete(event.pointerId);
     }
 
-    drawRoutePointerRef.current = null;
+    if (drawRoutePointerRef.current?.pointerId === event.pointerId) {
+      drawRoutePointerRef.current = null;
+    }
+
+    if (drawRouteActivePointersRef.current.size < 2) {
+      drawRoutePinchRef.current = null;
+    }
+
     setIsDrawingRoute(false);
     setIsDrawPanelCollapsed(false);
   }
 
   async function handleGenerateDrawnRouteCandidates() {
-    if (isRunning || isGeneratingDrawRouteCandidates) return;
+    if (isRunning || isGeneratingAnyCourse) return;
 
     const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
 
@@ -3617,6 +3866,8 @@ export default function RaceMap() {
       return;
     }
 
+    const { runId, signal } = beginCourseSearch();
+
     try {
       setIsGeneratingDrawRouteCandidates(true);
       setDrawRouteError(null);
@@ -3627,7 +3878,12 @@ export default function RaceMap() {
       const candidates = await generateDrawnRouteCandidates({
         drawnPoints: routeDrawnPoints,
         token,
+        signal,
       });
+
+      if (!isCurrentCourseSearch(runId, signal)) {
+        return;
+      }
 
       if (candidates.length === 0) {
         setDrawRouteError("그린 방향을 따라갈 수 있는 보행 코스 후보를 찾지 못했습니다.");
@@ -3643,6 +3899,17 @@ export default function RaceMap() {
       showAutoLoopCandidatePage(candidates, 0, "oneWay");
       setStatus(`그리기 후보 ${Math.min(candidates.length, AUTO_LOOP_PAGE_SIZE)}개 표시 중`);
     } catch (rawError) {
+      if (isCourseSearchAbortError(rawError)) {
+        if (isCurrentCourseSearch(runId, signal)) {
+          setStatus("코스 탐색을 중지했습니다.");
+        }
+        return;
+      }
+
+      if (!isCurrentCourseSearch(runId, signal)) {
+        return;
+      }
+
       const message =
         rawError instanceof Error
           ? rawError.message
@@ -3651,7 +3918,10 @@ export default function RaceMap() {
       setDrawRouteError(message);
       setStatus("그리기 후보 생성 실패");
     } finally {
-      setIsGeneratingDrawRouteCandidates(false);
+      if (isCurrentCourseSearch(runId, signal)) {
+        setIsGeneratingDrawRouteCandidates(false);
+        finishCourseSearch(runId);
+      }
     }
   }
 
@@ -3782,7 +4052,7 @@ export default function RaceMap() {
   }
 
   async function handleGenerateOutAndBackCandidates() {
-    if (isRunning) return;
+    if (isRunning || isGeneratingAnyCourse) return;
 
     const targetDistanceM = parseAutoLoopTargetDistanceM();
 
@@ -3819,11 +4089,18 @@ export default function RaceMap() {
       return;
     }
 
+    const { runId, signal } = beginCourseSearch();
+
     try {
       setIsGeneratingAutoLoop(true);
       setStatus("현재 위치를 가져오는 중...");
 
       const position = await getCurrentPosition();
+
+      if (!isCurrentCourseSearch(runId, signal)) {
+        return;
+      }
+
       const accuracy = position.coords.accuracy;
 
       if (accuracy > 120) {
@@ -3872,6 +4149,10 @@ export default function RaceMap() {
         toleranceM: DEFAULT_DISTANCE_TOLERANCE_M,
       });
 
+      if (!isCurrentCourseSearch(runId, signal)) {
+        return;
+      }
+
       if (candidates.length === 0) {
         setAutoLoopError("생성 가능한 왕복 후보를 찾지 못했습니다.");
         setStatus("왕복 후보 없음");
@@ -3881,17 +4162,31 @@ export default function RaceMap() {
       setAutoLoopAllCandidates(candidates);
       showAutoLoopCandidatePage(candidates, 0, "outAndBack");
     } catch (rawError) {
+      if (isCourseSearchAbortError(rawError)) {
+        if (isCurrentCourseSearch(runId, signal)) {
+          setStatus("코스 탐색을 중지했습니다.");
+        }
+        return;
+      }
+
+      if (!isCurrentCourseSearch(runId, signal)) {
+        return;
+      }
+
       const message = getPositionErrorMessage(rawError);
 
       setAutoLoopError(message);
       setStatus("왕복 후보 생성 실패");
     } finally {
-      setIsGeneratingAutoLoop(false);
+      if (isCurrentCourseSearch(runId, signal)) {
+        setIsGeneratingAutoLoop(false);
+        finishCourseSearch(runId);
+      }
     }
   }
 
   async function handleGenerateOneWayCandidates() {
-    if (isRunning) return;
+    if (isRunning || isGeneratingAnyCourse) return;
 
     const targetDistanceM = parseAutoLoopTargetDistanceM();
 
@@ -3928,11 +4223,18 @@ export default function RaceMap() {
       return;
     }
 
+    const { runId, signal } = beginCourseSearch();
+
     try {
       setIsGeneratingOneWay(true);
       setStatus("현재 위치를 가져오는 중...");
 
       const position = await getCurrentPosition();
+
+      if (!isCurrentCourseSearch(runId, signal)) {
+        return;
+      }
+
       const accuracy = position.coords.accuracy;
 
       if (accuracy > 120) {
@@ -3979,7 +4281,12 @@ export default function RaceMap() {
         token,
         targetDistanceM,
         toleranceM: DEFAULT_DISTANCE_TOLERANCE_M,
+        signal,
       });
+
+      if (!isCurrentCourseSearch(runId, signal)) {
+        return;
+      }
 
       if (candidates.length === 0) {
         setAutoLoopError("생성 가능한 편도 후보를 찾지 못했습니다.");
@@ -3990,12 +4297,26 @@ export default function RaceMap() {
       setAutoLoopAllCandidates(candidates);
       showAutoLoopCandidatePage(candidates, 0, "oneWay");
     } catch (rawError) {
+      if (isCourseSearchAbortError(rawError)) {
+        if (isCurrentCourseSearch(runId, signal)) {
+          setStatus("코스 탐색을 중지했습니다.");
+        }
+        return;
+      }
+
+      if (!isCurrentCourseSearch(runId, signal)) {
+        return;
+      }
+
       const message = getPositionErrorMessage(rawError);
 
       setAutoLoopError(message);
       setStatus("편도 후보 생성 실패");
     } finally {
-      setIsGeneratingOneWay(false);
+      if (isCurrentCourseSearch(runId, signal)) {
+        setIsGeneratingOneWay(false);
+        finishCourseSearch(runId);
+      }
     }
   }
 
@@ -4779,7 +5100,7 @@ export default function RaceMap() {
       {activePanel === "setup" && <div className="setup-background" />}
       <SetupLiquidShaderCanvas isActive={activePanel === "setup"} />
 
-      {activePanel === "map" && isDrawRouteMode && (
+      {activePanel === "map" && isDrawRouteMode && drawRouteInteractionMode === "draw" && (
         <div
           className="draw-route-gesture-layer"
           aria-label="지도 위에 코스 방향 그리기"
@@ -5170,6 +5491,16 @@ export default function RaceMap() {
                     >
                       {isGeneratingOneWay ? "편도 코스 찾는 중..." : "편도 코스 찾기"}
                     </button>
+
+                    {isGeneratingAnyCourse && (
+                      <button
+                        type="button"
+                        onClick={handleStopCourseSearch}
+                        className="course-search-stop-button px-3 py-2 text-xs font-black"
+                      >
+                        코스 탐색 중지
+                      </button>
+                    )}
                   </div>
 
                   <div className="mt-2 text-[11px] text-slate-500">
@@ -5555,6 +5886,16 @@ export default function RaceMap() {
             </div>
 
             <div className="candidate-bottom-sheet-actions">
+              {isGeneratingAnyCourse && (
+                <button
+                  type="button"
+                  onClick={handleStopCourseSearch}
+                  className="candidate-sheet-control-button candidate-sheet-stop-button"
+                >
+                  탐색 중지
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => setIsAutoLoopPanelCollapsed((value) => !value)}
@@ -5946,11 +6287,13 @@ export default function RaceMap() {
                 코스 그리기
               </div>
               <div className="truncate text-xs font-semibold text-slate-500">
-                {isDrawingRoute
-                  ? "그리고 있습니다. 손가락을 떼면 종료됩니다."
-                  : drawnRouteDistanceM
-                    ? `그린 길이 ${formatDraftDistance(drawnRouteDistanceM)}`
-                    : "지도 위를 손가락으로 그려 원하는 방향을 알려주세요."}
+                {drawRouteInteractionMode === "move"
+                  ? "지도 이동 모드 · 지도를 움직인 뒤 그리기로 돌아오세요."
+                  : isDrawingRoute
+                    ? "그리고 있습니다. 손가락을 떼면 종료됩니다."
+                    : drawnRouteDistanceM
+                      ? `그린 길이 ${formatDraftDistance(drawnRouteDistanceM)}`
+                      : "한 손가락으로 그리고, 두 손가락으로 확대/축소할 수 있습니다."}
               </div>
             </div>
 
@@ -5975,6 +6318,41 @@ export default function RaceMap() {
 
           {!isDrawPanelCollapsed && (
             <div className="draw-bottom-sheet-body">
+              <div className="draw-route-mode-toggle-card">
+                <div className="mb-2 text-xs font-black text-slate-900">
+                  지도 조작 방식
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleSetDrawRouteInteractionMode("draw")}
+                    disabled={isGeneratingDrawRouteCandidates}
+                    className={`liquid-choice-button rounded-xl px-3 py-2 text-xs font-black disabled:cursor-not-allowed ${
+                      drawRouteInteractionMode === "draw"
+                        ? "liquid-selected-control"
+                        : "liquid-clear-control"
+                    }`}
+                  >
+                    그리기 모드
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSetDrawRouteInteractionMode("move")}
+                    disabled={isGeneratingDrawRouteCandidates}
+                    className={`liquid-choice-button rounded-xl px-3 py-2 text-xs font-black disabled:cursor-not-allowed ${
+                      drawRouteInteractionMode === "move"
+                        ? "liquid-selected-control"
+                        : "liquid-clear-control"
+                    }`}
+                  >
+                    지도 이동 모드
+                  </button>
+                </div>
+                <div className="mt-2 text-[11px] font-semibold leading-relaxed text-slate-500">
+                  그리기 모드에서는 한 손가락으로 코스를 그리고, 두 손가락으로 확대/축소할 수 있습니다. 지도를 자유롭게 옮기려면 지도 이동 모드로 전환하세요.
+                </div>
+              </div>
+
               <div className="draw-route-summary-card">
                 <div className="text-[11px] font-bold text-slate-500">
                   그린 선 기준
@@ -5992,7 +6370,7 @@ export default function RaceMap() {
                   사용 방법
                 </div>
                 <div className="mt-1 text-[11px] font-semibold leading-relaxed text-slate-600">
-                  지도 위 빈 곳을 누른 채 원하는 방향으로 쭉 그리세요. 지도 이동은 잠시 막히고, 후보 생성 후 다시 일반 지도 조작이 가능합니다.
+                  지도 위 빈 곳을 누른 채 원하는 방향으로 쭉 그리세요. 지도 이동이 필요하면 지도 이동 모드로 전환하고, 확대/축소는 그리기 모드에서도 두 손가락으로 할 수 있습니다.
                 </div>
               </div>
 
@@ -6015,11 +6393,21 @@ export default function RaceMap() {
                 <button
                   type="button"
                   onClick={handleGenerateDrawnRouteCandidates}
-                  disabled={drawnRoutePoints.length < 2 || isGeneratingDrawRouteCandidates}
+                  disabled={drawnRoutePoints.length < 2 || isGeneratingAnyCourse}
                   className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
                   {isGeneratingDrawRouteCandidates ? "후보 찾는 중..." : "후보 찾기"}
                 </button>
+
+                {isGeneratingDrawRouteCandidates && (
+                  <button
+                    type="button"
+                    onClick={handleStopCourseSearch}
+                    className="course-search-stop-button col-span-2 px-3 py-2 text-xs font-black"
+                  >
+                    코스 탐색 중지
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -9305,7 +9693,8 @@ export default function RaceMap() {
 
         .custom-distance-summary-card,
         .draw-route-summary-card,
-        .draw-route-guide-card {
+        .draw-route-guide-card,
+        .draw-route-mode-toggle-card {
           border: 1px solid rgba(255, 255, 255, 0.62);
           border-radius: 18px;
           background:
@@ -9482,10 +9871,15 @@ export default function RaceMap() {
           background: transparent;
         }
 
+        .draw-route-mode-toggle-card {
+          margin-bottom: 10px;
+        }
+
         .race-draw-bottom-sheet {
           z-index: 46 !important;
         }
 
+        .draw-route-mode-toggle-card + .draw-route-summary-card,
         .draw-route-summary-card + .draw-route-guide-card {
           margin-top: 10px;
         }
@@ -9503,6 +9897,28 @@ export default function RaceMap() {
           text-shadow: 0 1px 2px rgba(0, 0, 0, 0.28) !important;
         }
 
+
+
+        /* Course search cancellation controls */
+        .course-search-stop-button,
+        .candidate-sheet-stop-button {
+          border: 1px solid rgba(248, 113, 113, 0.36) !important;
+          border-radius: 16px !important;
+          background:
+            linear-gradient(135deg, rgba(254, 242, 242, 0.72), rgba(255, 255, 255, 0.22)) !important;
+          color: #b91c1c !important;
+          text-shadow: none !important;
+          backdrop-filter: blur(22px) saturate(170%) !important;
+          -webkit-backdrop-filter: blur(22px) saturate(170%) !important;
+          box-shadow:
+            0 14px 32px rgba(185, 28, 28, 0.10),
+            inset 0 1px 0 rgba(255, 255, 255, 0.82),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.28) !important;
+        }
+
+        .candidate-sheet-stop-button {
+          white-space: nowrap;
+        }
       `}</style>
 
     </div>
