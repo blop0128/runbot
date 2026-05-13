@@ -1119,6 +1119,256 @@ function groupRunRecordsByDate(records: RunRecord[]): Array<{
 }
 
 
+
+function SetupLiquidShaderCanvas({ isActive }: { isActive: boolean }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    if (!isActive) return;
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const gl = canvas.getContext("webgl", {
+      alpha: true,
+      antialias: true,
+      premultipliedAlpha: true,
+      preserveDrawingBuffer: false,
+    });
+
+    if (!gl) return;
+
+    const vertexSource = `
+      attribute vec2 a_position;
+      void main() {
+        gl_Position = vec4(a_position, 0.0, 1.0);
+      }
+    `;
+
+    const fragmentSource = `
+      precision mediump float;
+
+      uniform vec2 u_resolution;
+      uniform float u_time;
+
+      float hash(vec2 p) {
+        p = fract(p * vec2(123.34, 456.21));
+        p += dot(p, p + 45.32);
+        return fract(p.x * p.y);
+      }
+
+      float noise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        float a = hash(i);
+        float b = hash(i + vec2(1.0, 0.0));
+        float c = hash(i + vec2(0.0, 1.0));
+        float d = hash(i + vec2(1.0, 1.0));
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(a, b, u.x) +
+          (c - a) * u.y * (1.0 - u.x) +
+          (d - b) * u.x * u.y;
+      }
+
+      float fbm(vec2 p) {
+        float value = 0.0;
+        float amp = 0.5;
+        for (int i = 0; i < 5; i++) {
+          value += amp * noise(p);
+          p *= 2.02;
+          amp *= 0.52;
+        }
+        return value;
+      }
+
+      float sdRoundBox(vec2 p, vec2 b, float r) {
+        vec2 q = abs(p) - b + r;
+        return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+      }
+
+      float lensAlpha(float d) {
+        return 1.0 - smoothstep(0.0, 0.012, d);
+      }
+
+      float rim(float d, float width) {
+        return 1.0 - smoothstep(width, width * 2.2, abs(d));
+      }
+
+      vec3 addLens(vec3 color, vec2 uv, vec2 center, vec2 size, float radius, vec3 tint, float strength) {
+        vec2 p = uv - center;
+        float d = sdRoundBox(p, size, radius);
+        float a = lensAlpha(d);
+        float edge = rim(d, 0.006);
+        float inner = 1.0 - smoothstep(-0.08, 0.012, d);
+        float highlight = smoothstep(0.72, 1.0, 1.0 - length((p + vec2(size.x * 0.42, size.y * 0.45)) / max(size, vec2(0.001))));
+        vec3 refracted = color + vec3(0.025, 0.030, 0.036) * fbm(uv * 7.0 + u_time * 0.05);
+        refracted = mix(refracted, tint, 0.08 * strength * a);
+        refracted += vec3(0.14) * highlight * a * strength;
+        refracted += vec3(0.32) * edge * strength;
+        refracted -= vec3(0.035) * inner * a;
+        return mix(color, refracted, a * 0.86);
+      }
+
+      void main() {
+        vec2 frag = gl_FragCoord.xy;
+        vec2 st = frag / u_resolution;
+        vec2 uv = st;
+        float aspect = u_resolution.x / max(u_resolution.y, 1.0);
+        vec2 p = (st - 0.5) * vec2(aspect, 1.0);
+
+        float t = u_time * 0.055;
+        float warp = fbm(p * 2.1 + vec2(t, -t * 0.8));
+        vec2 flow = vec2(
+          fbm(p * 2.4 + vec2(t * 1.7, 2.1)),
+          fbm(p * 2.2 + vec2(-1.5, t * 1.4))
+        ) - 0.5;
+        uv += flow * 0.015;
+
+        vec3 top = vec3(0.982, 0.987, 0.996);
+        vec3 bottom = vec3(0.938, 0.955, 0.982);
+        vec3 color = mix(top, bottom, smoothstep(0.0, 1.0, uv.y));
+
+        vec3 mint = vec3(0.70, 1.00, 0.78);
+        vec3 blue = vec3(0.56, 0.82, 1.00);
+        vec3 pink = vec3(1.00, 0.72, 0.92);
+        vec3 amber = vec3(1.00, 0.83, 0.47);
+
+        float g1 = smoothstep(0.62, 0.0, length((uv - vec2(0.24, 0.17)) / vec2(0.32, 0.24)));
+        float g2 = smoothstep(0.72, 0.0, length((uv - vec2(0.82, 0.12)) / vec2(0.36, 0.28)));
+        float g3 = smoothstep(0.64, 0.0, length((uv - vec2(0.70, 0.82)) / vec2(0.42, 0.30)));
+        color = mix(color, blue, g1 * 0.20);
+        color = mix(color, mint, g2 * 0.18);
+        color = mix(color, pink, g3 * 0.13);
+
+        float caustic = pow(abs(sin((p.x + warp * 0.30) * 18.0 + cos(p.y * 9.0 + t * 8.0))), 26.0);
+        color += vec3(0.035, 0.045, 0.060) * caustic;
+
+        color = addLens(color, uv, vec2(0.22, 0.23), vec2(0.19, 0.070), 0.050, blue, 0.55);
+        color = addLens(color, uv, vec2(0.64, 0.25), vec2(0.29, 0.096), 0.065, mint, 0.50);
+        color = addLens(color, uv, vec2(0.73, 0.52), vec2(0.21, 0.115), 0.085, amber, 0.46);
+        color = addLens(color, uv, vec2(0.31, 0.73), vec2(0.18, 0.088), 0.064, mint, 0.40);
+
+        float band = 1.0 - smoothstep(0.012, 0.024, abs(uv.y - 0.44));
+        band *= smoothstep(0.04, 0.10, uv.x) * (1.0 - smoothstep(0.94, 0.99, uv.x));
+        vec3 spectral = mix(blue, pink, smoothstep(0.35, 0.72, uv.x));
+        spectral = mix(spectral, amber, smoothstep(0.76, 0.95, uv.x));
+        color = mix(color, spectral, band * 0.54);
+
+        float orb = smoothstep(0.14, 0.0, length((uv - vec2(0.78, 0.44)) / vec2(0.11, 0.14)));
+        color = mix(color, vec3(1.00, 0.56, 0.18), orb * 0.70);
+        color += vec3(0.18) * rim(length((uv - vec2(0.78, 0.44)) / vec2(0.11, 0.14)) - 1.0, 0.035) * 0.16;
+
+        float vignette = smoothstep(0.92, 0.18, length(p));
+        color = mix(vec3(0.88, 0.90, 0.94), color, vignette);
+        color += vec3(0.012) * (noise(frag * 0.55 + u_time) - 0.5);
+
+        gl_FragColor = vec4(color, 0.90);
+      }
+    `;
+
+    const createShader = (type: number, source: string) => {
+      const shader = gl.createShader(type);
+      if (!shader) return null;
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        console.warn("Liquid shader compile error", gl.getShaderInfoLog(shader));
+        gl.deleteShader(shader);
+        return null;
+      }
+      return shader;
+    };
+
+    const vertexShader = createShader(gl.VERTEX_SHADER, vertexSource);
+    const fragmentShader = createShader(gl.FRAGMENT_SHADER, fragmentSource);
+
+    if (!vertexShader || !fragmentShader) return;
+
+    const program = gl.createProgram();
+    if (!program) return;
+
+    gl.attachShader(program, vertexShader);
+    gl.attachShader(program, fragmentShader);
+    gl.linkProgram(program);
+
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      console.warn("Liquid shader link error", gl.getProgramInfoLog(program));
+      return;
+    }
+
+    const positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]),
+      gl.STATIC_DRAW
+    );
+
+    const positionLocation = gl.getAttribLocation(program, "a_position");
+    const resolutionLocation = gl.getUniformLocation(program, "u_resolution");
+    const timeLocation = gl.getUniformLocation(program, "u_time");
+
+    let frameId: number | null = null;
+    const start = performance.now();
+
+    const resize = () => {
+      const parent = canvas.parentElement ?? document.body;
+      const rect = parent.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const width = Math.max(1, Math.floor(rect.width * dpr));
+      const height = Math.max(1, Math.floor(rect.height * dpr));
+
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+        canvas.style.width = `${rect.width}px`;
+        canvas.style.height = `${rect.height}px`;
+      }
+
+      gl.viewport(0, 0, canvas.width, canvas.height);
+    };
+
+    const render = (now: number) => {
+      resize();
+      gl.useProgram(program);
+      gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+      gl.enableVertexAttribArray(positionLocation);
+      gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+      gl.uniform2f(resolutionLocation, canvas.width, canvas.height);
+      gl.uniform1f(timeLocation, (now - start) / 1000);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      frameId = window.requestAnimationFrame(render);
+    };
+
+    frameId = window.requestAnimationFrame(render);
+    window.addEventListener("resize", resize);
+
+    return () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
+
+      window.removeEventListener("resize", resize);
+      gl.deleteBuffer(positionBuffer);
+      gl.deleteProgram(program);
+      gl.deleteShader(vertexShader);
+      gl.deleteShader(fragmentShader);
+    };
+  }, [isActive]);
+
+  if (!isActive) return null;
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="setup-liquid-shader-canvas"
+      aria-hidden="true"
+    />
+  );
+}
+
 export default function RaceMap() {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -3855,6 +4105,7 @@ export default function RaceMap() {
       <div ref={mapContainerRef} className="race-map" />
 
       {activePanel === "setup" && <div className="setup-background" />}
+      <SetupLiquidShaderCanvas isActive={activePanel === "setup"} />
 
       <div className="race-top-tabs">
         <button
@@ -7011,6 +7262,250 @@ export default function RaceMap() {
             0 18px 42px rgba(15, 23, 42, 0.18),
             inset 0 1px 0 rgba(255,255,255,0.20) !important;
         }
+
+
+
+        /* =========================================================
+           WebGL shader liquid-glass background pass
+           - This is a real fragment-shader layer, not a static image.
+           - DOM text remains separate for readability.
+           ========================================================= */
+        .race-root-setup .setup-background {
+          position: absolute;
+          inset: 0;
+          z-index: 20;
+          overflow: hidden;
+          background:
+            radial-gradient(circle at 10% 8%, rgba(255, 255, 255, 0.98), transparent 36%),
+            radial-gradient(circle at 86% 12%, rgba(219, 234, 254, 0.42), transparent 32%),
+            radial-gradient(circle at 13% 92%, rgba(220, 252, 231, 0.32), transparent 34%),
+            linear-gradient(135deg, #f7f8fb 0%, #eef2f7 48%, #fbfdff 100%) !important;
+          background-image: none !important;
+        }
+
+        .setup-liquid-shader-canvas {
+          position: absolute;
+          inset: 0;
+          z-index: 21;
+          width: 100%;
+          height: 100%;
+          pointer-events: none;
+          opacity: 0.92;
+          mix-blend-mode: normal;
+          filter: saturate(1.06) contrast(1.01);
+        }
+
+        .race-root-map .setup-liquid-shader-canvas {
+          display: none;
+        }
+
+        .race-root-setup .race-setup-panel,
+        .race-root-setup .race-top-tabs {
+          position: absolute;
+          z-index: 40;
+        }
+
+        .race-root-setup .race-top-tabs {
+          z-index: 55;
+        }
+
+        /* Shader-aware glass: lower fill so the WebGL liquid layer shows through. */
+        .race-root-setup .hero-glass-card,
+        .race-root-setup .race-setup-panel .rounded-xl.border,
+        .race-root-setup .race-setup-panel .rounded-lg.border,
+        .race-root-setup .race-setup-panel .rounded-xl[class*="border"],
+        .race-root-setup .race-setup-panel .rounded-lg[class*="border"],
+        .race-root-setup .run-settings-panel {
+          position: relative;
+          overflow: hidden;
+          border-color: rgba(255, 255, 255, 0.66) !important;
+          background:
+            linear-gradient(135deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.030)) !important;
+          backdrop-filter: blur(34px) saturate(190%) brightness(1.05);
+          -webkit-backdrop-filter: blur(34px) saturate(190%) brightness(1.05);
+          box-shadow:
+            0 24px 58px rgba(15, 23, 42, 0.10),
+            inset 0 1.5px 0 rgba(255, 255, 255, 0.92),
+            inset 0 -1px 0 rgba(15, 23, 42, 0.055) !important;
+        }
+
+        .race-root-setup .hero-glass-card::before,
+        .race-root-setup .race-setup-panel .rounded-xl.border::before,
+        .race-root-setup .race-setup-panel .rounded-lg.border::before,
+        .race-root-setup .race-setup-panel .rounded-xl[class*="border"]::before,
+        .race-root-setup .race-setup-panel .rounded-lg[class*="border"]::before,
+        .race-root-setup .run-settings-panel::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: 0;
+          border-radius: inherit;
+          pointer-events: none;
+          background:
+            radial-gradient(circle at 20% 0%, rgba(255,255,255,0.68), transparent 34%),
+            linear-gradient(180deg, rgba(255,255,255,0.38), rgba(255,255,255,0.08) 42%, transparent 100%);
+          opacity: 0.82;
+          filter: url("#liquid-glass-soft");
+        }
+
+        .race-root-setup .hero-glass-card::after,
+        .race-root-setup .race-setup-panel .rounded-xl.border::after,
+        .race-root-setup .race-setup-panel .rounded-lg.border::after,
+        .race-root-setup .race-setup-panel .rounded-xl[class*="border"]::after,
+        .race-root-setup .race-setup-panel .rounded-lg[class*="border"]::after,
+        .race-root-setup .run-settings-panel::after {
+          content: "";
+          position: absolute;
+          inset: 1px;
+          z-index: 0;
+          border-radius: inherit;
+          pointer-events: none;
+          background:
+            linear-gradient(135deg, rgba(255,255,255,0.38), transparent 34%, rgba(255,255,255,0.08) 68%, transparent 100%);
+          opacity: 0.72;
+        }
+
+        .race-root-setup .hero-glass-card > *,
+        .race-root-setup .race-setup-panel .rounded-xl.border > *,
+        .race-root-setup .race-setup-panel .rounded-lg.border > *,
+        .race-root-setup .race-setup-panel .rounded-xl[class*="border"] > *,
+        .race-root-setup .race-setup-panel .rounded-lg[class*="border"] > *,
+        .race-root-setup .run-settings-panel > * {
+          position: relative;
+          z-index: 1;
+        }
+
+        .race-root-setup .hero-glass-card .text-emerald-600,
+        .race-root-setup .hero-glass-card h1,
+        .race-root-setup .hero-glass-card [class*="text-3xl"] {
+          color: #16a37b !important;
+        }
+
+        .race-root-setup .race-setup-panel .bg-white,
+        .race-root-setup .race-setup-panel .bg-slate-50,
+        .race-root-setup .race-setup-panel .bg-blue-50,
+        .race-root-setup .race-setup-panel .bg-orange-50,
+        .race-root-setup .race-setup-panel .bg-red-50,
+        .race-root-setup .race-setup-panel .bg-yellow-50,
+        .race-root-setup .race-setup-panel .bg-emerald-50,
+        .race-root-setup .run-settings-panel .bg-white,
+        .race-root-setup .run-settings-panel .bg-slate-50 {
+          border: 1px solid rgba(255, 255, 255, 0.68) !important;
+          background: linear-gradient(135deg, rgba(255,255,255,0.16), rgba(255,255,255,0.030)) !important;
+          backdrop-filter: blur(30px) saturate(190%) brightness(1.05);
+          -webkit-backdrop-filter: blur(30px) saturate(190%) brightness(1.05);
+          box-shadow:
+            inset 0 1px 0 rgba(255,255,255,0.86),
+            inset 0 -1px 0 rgba(15,23,42,0.045),
+            0 10px 24px rgba(15,23,42,0.035) !important;
+        }
+
+        .race-root-setup input,
+        .race-root-setup textarea,
+        .race-root-setup select {
+          border: 1px solid rgba(255,255,255,0.72) !important;
+          background: linear-gradient(135deg, rgba(255,255,255,0.20), rgba(255,255,255,0.040)) !important;
+          color: rgba(15,23,42,0.94) !important;
+          backdrop-filter: blur(28px) saturate(190%) brightness(1.05);
+          -webkit-backdrop-filter: blur(28px) saturate(190%) brightness(1.05);
+          box-shadow:
+            inset 0 1px 0 rgba(255,255,255,0.88),
+            inset 0 -1px 0 rgba(15,23,42,0.045),
+            0 10px 22px rgba(15,23,42,0.035) !important;
+        }
+
+        .race-root-setup button,
+        .race-root-setup .course-action-button,
+        .race-root-setup .course-action-primary {
+          position: relative;
+          overflow: hidden;
+          isolation: isolate;
+          border: 1px solid rgba(255,255,255,0.72) !important;
+          background: linear-gradient(135deg, rgba(255,255,255,0.20), rgba(255,255,255,0.030)) !important;
+          color: rgba(15,23,42,0.94) !important;
+          backdrop-filter: blur(30px) saturate(190%) brightness(1.05);
+          -webkit-backdrop-filter: blur(30px) saturate(190%) brightness(1.05);
+          box-shadow:
+            0 14px 34px rgba(15,23,42,0.06),
+            inset 0 1.25px 0 rgba(255,255,255,0.92),
+            inset 0 -1px 0 rgba(15,23,42,0.05) !important;
+          transition: transform 140ms ease, filter 140ms ease, box-shadow 140ms ease, border-color 140ms ease, background 140ms ease;
+        }
+
+        .race-root-setup button::before,
+        .race-root-setup .course-action-button::before,
+        .race-root-setup .course-action-primary::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: -1;
+          border-radius: inherit;
+          pointer-events: none;
+          background:
+            radial-gradient(circle at 24% 0%, rgba(255,255,255,0.70), transparent 35%),
+            linear-gradient(180deg, rgba(255,255,255,0.36), transparent 48%);
+          filter: url("#liquid-glass-soft");
+          opacity: 0.78;
+        }
+
+        .race-root-setup .race-tab-active,
+        .race-root-setup button.bg-slate-900,
+        .race-root-setup button.bg-slate-950,
+        .race-root-setup button.bg-slate-800,
+        .race-root-setup button.bg-blue-600,
+        .race-root-setup button.bg-green-600,
+        .race-root-setup button.bg-orange-600 {
+          border-color: rgba(255,255,255,0.50) !important;
+          background: linear-gradient(135deg, rgba(20,24,34,0.78), rgba(10,14,22,0.50)) !important;
+          color: rgba(255,255,255,0.98) !important;
+          backdrop-filter: blur(34px) saturate(190%) brightness(1.02);
+          -webkit-backdrop-filter: blur(34px) saturate(190%) brightness(1.02);
+          box-shadow:
+            0 18px 38px rgba(15,23,42,0.18),
+            inset 0 1px 0 rgba(255,255,255,0.24),
+            inset 0 -1px 0 rgba(255,255,255,0.08) !important;
+        }
+
+        .race-root-setup .race-tab-active *,
+        .race-root-setup button.bg-slate-900 *,
+        .race-root-setup button.bg-slate-950 *,
+        .race-root-setup button.bg-slate-800 *,
+        .race-root-setup button.bg-blue-600 *,
+        .race-root-setup button.bg-green-600 *,
+        .race-root-setup button.bg-orange-600 * {
+          color: rgba(255,255,255,0.98) !important;
+        }
+
+        .race-root-setup button:disabled,
+        .race-root-setup .course-action-button:disabled,
+        .race-root-setup .course-action-primary:disabled {
+          opacity: 1 !important;
+          cursor: not-allowed;
+          border-color: rgba(255,255,255,0.58) !important;
+          background: linear-gradient(135deg, rgba(255,255,255,0.14), rgba(255,255,255,0.020)) !important;
+          color: rgba(100,116,139,0.50) !important;
+          filter: none !important;
+          box-shadow:
+            inset 0 1px 0 rgba(255,255,255,0.62),
+            inset 0 -1px 0 rgba(15,23,42,0.035),
+            0 8px 20px rgba(15,23,42,0.025) !important;
+        }
+
+        .race-root-setup button:disabled * {
+          color: rgba(100,116,139,0.50) !important;
+        }
+
+        .race-root-setup button:active:not(:disabled),
+        .race-root-setup .course-action-button:active:not(:disabled),
+        .race-root-setup .course-action-primary:active:not(:disabled) {
+          transform: translateY(1px) scale(0.972);
+          filter: brightness(0.965);
+          box-shadow:
+            0 7px 18px rgba(15,23,42,0.10),
+            inset 0 4px 14px rgba(15,23,42,0.14),
+            inset 0 1px 0 rgba(255,255,255,0.24) !important;
+        }
+
 
       `}</style>
 
