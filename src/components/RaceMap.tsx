@@ -1187,26 +1187,33 @@ function SetupLiquidShaderCanvas({ isActive }: { isActive: boolean }) {
       }
 
       float lensAlpha(float d) {
-        return 1.0 - smoothstep(0.0, 0.012, d);
+        return 1.0 - smoothstep(0.0, 0.018, d);
       }
 
       float rim(float d, float width) {
-        return 1.0 - smoothstep(width, width * 2.2, abs(d));
+        return 1.0 - smoothstep(width, width * 2.4, abs(d));
       }
 
-      vec3 addLens(vec3 color, vec2 uv, vec2 center, vec2 size, float radius, vec3 tint, float strength) {
+      vec3 addLens(vec3 color, vec2 uv, vec2 center, vec2 size, float radius, float strength) {
         vec2 p = uv - center;
         float d = sdRoundBox(p, size, radius);
         float a = lensAlpha(d);
         float edge = rim(d, 0.006);
-        float inner = 1.0 - smoothstep(-0.08, 0.012, d);
-        float highlight = smoothstep(0.72, 1.0, 1.0 - length((p + vec2(size.x * 0.42, size.y * 0.45)) / max(size, vec2(0.001))));
-        vec3 refracted = color + vec3(0.025, 0.030, 0.036) * fbm(uv * 7.0 + u_time * 0.05);
-        refracted = mix(refracted, tint, 0.08 * strength * a);
-        refracted += vec3(0.14) * highlight * a * strength;
-        refracted += vec3(0.32) * edge * strength;
-        refracted -= vec3(0.035) * inner * a;
-        return mix(color, refracted, a * 0.86);
+        float inner = 1.0 - smoothstep(-0.10, 0.018, d);
+        float n = fbm((uv + center) * 8.0 + vec2(u_time * 0.018, -u_time * 0.014));
+        float highlight = smoothstep(
+          0.58,
+          1.0,
+          1.0 - length((p + vec2(size.x * 0.42, size.y * 0.46)) / max(size, vec2(0.001)))
+        );
+
+        vec3 refracted = color;
+        refracted += vec3(0.036) * n * strength * a;
+        refracted += vec3(0.155) * highlight * a * strength;
+        refracted += vec3(0.220) * edge * strength;
+        refracted -= vec3(0.026) * inner * a;
+
+        return mix(color, refracted, a * 0.74);
       }
 
       void main() {
@@ -1216,53 +1223,38 @@ function SetupLiquidShaderCanvas({ isActive }: { isActive: boolean }) {
         float aspect = u_resolution.x / max(u_resolution.y, 1.0);
         vec2 p = (st - 0.5) * vec2(aspect, 1.0);
 
-        float t = u_time * 0.055;
-        float warp = fbm(p * 2.1 + vec2(t, -t * 0.8));
+        float t = u_time * 0.030;
         vec2 flow = vec2(
-          fbm(p * 2.4 + vec2(t * 1.7, 2.1)),
-          fbm(p * 2.2 + vec2(-1.5, t * 1.4))
+          fbm(p * 1.85 + vec2(t * 1.30, 1.8)),
+          fbm(p * 1.70 + vec2(-1.2, t * 1.10))
         ) - 0.5;
-        uv += flow * 0.015;
+        uv += flow * 0.010;
 
-        vec3 top = vec3(0.982, 0.987, 0.996);
-        vec3 bottom = vec3(0.938, 0.955, 0.982);
+        vec3 top = vec3(0.990, 0.992, 0.996);
+        vec3 bottom = vec3(0.962, 0.970, 0.982);
         vec3 color = mix(top, bottom, smoothstep(0.0, 1.0, uv.y));
 
-        vec3 mint = vec3(0.70, 1.00, 0.78);
-        vec3 blue = vec3(0.56, 0.82, 1.00);
-        vec3 pink = vec3(1.00, 0.72, 0.92);
-        vec3 amber = vec3(1.00, 0.83, 0.47);
+        float cloud1 = smoothstep(0.78, 0.0, length((uv - vec2(0.18, 0.16)) / vec2(0.40, 0.28)));
+        float cloud2 = smoothstep(0.72, 0.0, length((uv - vec2(0.86, 0.20)) / vec2(0.38, 0.30)));
+        float cloud3 = smoothstep(0.70, 0.0, length((uv - vec2(0.55, 0.86)) / vec2(0.48, 0.30)));
+        color = mix(color, vec3(1.0), cloud1 * 0.18);
+        color = mix(color, vec3(0.940, 0.948, 0.962), cloud2 * 0.16);
+        color = mix(color, vec3(0.982, 0.986, 0.992), cloud3 * 0.14);
 
-        float g1 = smoothstep(0.62, 0.0, length((uv - vec2(0.24, 0.17)) / vec2(0.32, 0.24)));
-        float g2 = smoothstep(0.72, 0.0, length((uv - vec2(0.82, 0.12)) / vec2(0.36, 0.28)));
-        float g3 = smoothstep(0.64, 0.0, length((uv - vec2(0.70, 0.82)) / vec2(0.42, 0.30)));
-        color = mix(color, blue, g1 * 0.20);
-        color = mix(color, mint, g2 * 0.18);
-        color = mix(color, pink, g3 * 0.13);
+        float warp = fbm(p * 2.2 + vec2(t, -t * 0.8));
+        float caustic = pow(abs(sin((p.x + warp * 0.20) * 14.0 + cos(p.y * 7.0 + t * 5.0))), 34.0);
+        color += vec3(0.028) * caustic;
 
-        float caustic = pow(abs(sin((p.x + warp * 0.30) * 18.0 + cos(p.y * 9.0 + t * 8.0))), 26.0);
-        color += vec3(0.035, 0.045, 0.060) * caustic;
+        color = addLens(color, uv, vec2(0.20, 0.24), vec2(0.20, 0.070), 0.052, 0.44);
+        color = addLens(color, uv, vec2(0.68, 0.28), vec2(0.30, 0.098), 0.066, 0.38);
+        color = addLens(color, uv, vec2(0.72, 0.58), vec2(0.22, 0.116), 0.084, 0.34);
+        color = addLens(color, uv, vec2(0.30, 0.76), vec2(0.19, 0.090), 0.064, 0.30);
 
-        color = addLens(color, uv, vec2(0.22, 0.23), vec2(0.19, 0.070), 0.050, blue, 0.55);
-        color = addLens(color, uv, vec2(0.64, 0.25), vec2(0.29, 0.096), 0.065, mint, 0.50);
-        color = addLens(color, uv, vec2(0.73, 0.52), vec2(0.21, 0.115), 0.085, amber, 0.46);
-        color = addLens(color, uv, vec2(0.31, 0.73), vec2(0.18, 0.088), 0.064, mint, 0.40);
+        float vignette = smoothstep(1.05, 0.20, length(p));
+        color = mix(vec3(0.930, 0.936, 0.946), color, vignette);
+        color += vec3(0.008) * (noise(frag * 0.50 + u_time) - 0.5);
 
-        float band = 1.0 - smoothstep(0.012, 0.024, abs(uv.y - 0.44));
-        band *= smoothstep(0.04, 0.10, uv.x) * (1.0 - smoothstep(0.94, 0.99, uv.x));
-        vec3 spectral = mix(blue, pink, smoothstep(0.35, 0.72, uv.x));
-        spectral = mix(spectral, amber, smoothstep(0.76, 0.95, uv.x));
-        color = mix(color, spectral, band * 0.54);
-
-        float orb = smoothstep(0.14, 0.0, length((uv - vec2(0.78, 0.44)) / vec2(0.11, 0.14)));
-        color = mix(color, vec3(1.00, 0.56, 0.18), orb * 0.70);
-        color += vec3(0.18) * rim(length((uv - vec2(0.78, 0.44)) / vec2(0.11, 0.14)) - 1.0, 0.035) * 0.16;
-
-        float vignette = smoothstep(0.92, 0.18, length(p));
-        color = mix(vec3(0.88, 0.90, 0.94), color, vignette);
-        color += vec3(0.012) * (noise(frag * 0.55 + u_time) - 0.5);
-
-        gl_FragColor = vec4(color, 0.90);
+        gl_FragColor = vec4(color, 0.62);
       }
     `;
 
@@ -7276,10 +7268,10 @@ export default function RaceMap() {
           z-index: 20;
           overflow: hidden;
           background:
-            radial-gradient(circle at 10% 8%, rgba(255, 255, 255, 0.98), transparent 36%),
-            radial-gradient(circle at 86% 12%, rgba(219, 234, 254, 0.42), transparent 32%),
-            radial-gradient(circle at 13% 92%, rgba(220, 252, 231, 0.32), transparent 34%),
-            linear-gradient(135deg, #f7f8fb 0%, #eef2f7 48%, #fbfdff 100%) !important;
+            radial-gradient(circle at 18% 10%, rgba(255, 255, 255, 0.98), transparent 38%),
+            radial-gradient(circle at 82% 18%, rgba(245, 247, 250, 0.72), transparent 36%),
+            radial-gradient(circle at 18% 92%, rgba(235, 239, 245, 0.46), transparent 34%),
+            linear-gradient(135deg, #fbfcfe 0%, #f3f5f8 48%, #ffffff 100%) !important;
           background-image: none !important;
         }
 
@@ -7290,9 +7282,9 @@ export default function RaceMap() {
           width: 100%;
           height: 100%;
           pointer-events: none;
-          opacity: 0.92;
+          opacity: 0.62;
           mix-blend-mode: normal;
-          filter: saturate(1.06) contrast(1.01);
+          filter: saturate(0.15) contrast(1.02);
         }
 
         .race-root-map .setup-liquid-shader-canvas {
