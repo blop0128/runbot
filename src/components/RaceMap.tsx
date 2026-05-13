@@ -727,6 +727,145 @@ function estimateLoopLapCountByAngle(points: LngLat[]): number {
   return clampNumber(lapCount, 1, 5);
 }
 
+function closeLoopWithEntry(points: LngLat[], entry: LngLat): LngLat[] {
+  if (points.length === 0) return [entry, entry];
+
+  const cleaned = removeConsecutiveDuplicatePoints(points);
+  const result = cleaned.length > 0 ? [...cleaned] : [entry];
+
+  result[0] = entry;
+
+  const last = result[result.length - 1];
+  if (!last || haversineDistanceM(last, entry) > 8) {
+    result.push(entry);
+  } else {
+    result[result.length - 1] = entry;
+  }
+
+  return result;
+}
+
+function extractRepresentativeLoopLapPoints({
+  loopPoints,
+  loopEntry,
+  estimatedLapCount,
+}: {
+  loopPoints: LngLat[];
+  loopEntry: LngLat;
+  estimatedLapCount: number;
+}): LngLat[] {
+  const cleaned = closeLoopWithEntry(loopPoints, loopEntry);
+  const totalDistanceM = getPolylineLengthM(cleaned);
+  const lapCount = clampNumber(Math.round(estimatedLapCount), 1, 5);
+
+  if (cleaned.length < 4 || totalDistanceM < 120 || lapCount <= 1) {
+    return cleaned;
+  }
+
+  const targetLapDistanceM = totalDistanceM / lapCount;
+  const sampleCount = clampNumber(
+    Math.ceil(targetLapDistanceM / 55) + 1,
+    8,
+    18
+  );
+  const lapPoints: LngLat[] = [];
+
+  for (let index = 0; index < sampleCount; index += 1) {
+    const ratio = index / Math.max(1, sampleCount - 1);
+    lapPoints.push(getLngLatAtDistance(cleaned, targetLapDistanceM * ratio));
+  }
+
+  return closeLoopWithEntry(lapPoints, loopEntry);
+}
+
+function repeatClosedLoopPolyline(polyline: LngLat[], lapCount: number): LngLat[] {
+  const cleaned = removeConsecutiveDuplicatePoints(polyline);
+  if (cleaned.length < 2) return cleaned;
+
+  const safeLapCount = clampNumber(Math.round(lapCount), 1, 5);
+  let repeated: LngLat[] = [...cleaned];
+
+  for (let lapIndex = 1; lapIndex < safeLapCount; lapIndex += 1) {
+    repeated = [...repeated, ...cleaned.slice(1)];
+  }
+
+  return removeConsecutiveDuplicatePoints(repeated);
+}
+
+async function fetchCircularizedLoopRoute({
+  loopPoints,
+  loopEntry,
+  estimatedLapCount,
+  token,
+  signal,
+}: {
+  loopPoints: LngLat[];
+  loopEntry: LngLat;
+  estimatedLapCount: number;
+  token: string;
+  signal?: AbortSignal;
+}): Promise<{ distanceM: number; polyline: LngLat[] }> {
+  throwIfCourseSearchAborted(signal);
+
+  const lapCount = clampNumber(Math.round(estimatedLapCount), 1, 5);
+  const oneLapSketch = extractRepresentativeLoopLapPoints({
+    loopPoints,
+    loopEntry,
+    estimatedLapCount: lapCount,
+  });
+  const oneLapSketchDistanceM = getPolylineLengthM(oneLapSketch);
+
+  if (oneLapSketch.length < 4 || oneLapSketchDistanceM < 120) {
+    throw new Error("원형 루프 구간을 만들 수 없습니다.");
+  }
+
+  const loopAttempts = getLoopWaypointAttempts(oneLapSketch)
+    .map((attempt) => closeLoopWithEntry(attempt, loopEntry))
+    .filter((attempt) => attempt.length >= 4)
+    .slice(0, 6);
+
+  let bestRoute: { distanceM: number; polyline: LngLat[]; score: number } | null = null;
+
+  for (const attempt of loopAttempts) {
+    throwIfCourseSearchAborted(signal);
+
+    try {
+      const route = await fetchWalkingRouteBySegments(attempt, token, signal);
+      throwIfCourseSearchAborted(signal);
+
+      const distanceErrorM = Math.abs(route.distanceM - oneLapSketchDistanceM);
+      const score = calculateDrawRouteShapeScore({
+        routePolyline: route.polyline,
+        drawnPoints: oneLapSketch,
+        distanceErrorM,
+        isCircular: true,
+      });
+
+      if (!bestRoute || score < bestRoute.score) {
+        bestRoute = { ...route, score };
+      }
+    } catch (error) {
+      if (isCourseSearchAbortError(error)) {
+        throw error;
+      }
+
+      console.warn("Failed to generate circularized loop lap route:", {
+        attempt,
+        error,
+      });
+    }
+  }
+
+  if (!bestRoute) {
+    throw new Error("원형 루프 구간 경로를 찾지 못했습니다.");
+  }
+
+  return {
+    distanceM: bestRoute.distanceM * lapCount,
+    polyline: repeatClosedLoopPolyline(bestRoute.polyline, lapCount),
+  };
+}
+
 function detectOutAndBackRepeatedLoopPattern(
   points: LngLat[]
 ): OutAndBackRepeatedLoopPattern | null {
@@ -889,20 +1028,21 @@ async function fetchOutAndBackRepeatedLoopRoute({
     throw new Error("왕복 루프 진입 구간을 만들 수 없습니다.");
   }
 
-  const loopAttempt = makeOrderedSegmentAttempt(pattern.loopPoints, {
-    maxPoints: pattern.estimatedLapCount >= 2 ? 23 : 18,
-    minDistanceM: pattern.estimatedLapCount >= 2 ? 70 : 85,
-    forceCloseTo: pattern.loopEntry,
-  });
-
-  if (loopAttempt.length < 4) {
-    throw new Error("반복 루프 구간을 만들 수 없습니다.");
-  }
-
   const stemRoute = await fetchWalkingRouteBySegments(stemAttempt, token, signal);
   throwIfCourseSearchAborted(signal);
 
-  const loopRoute = await fetchWalkingRouteBySegments(loopAttempt, token, signal);
+  // The repeated local loop itself is intentionally routed by the circular-loop
+  // generator instead of the raw ordered-segment generator. Raw repeated sketches
+  // often contain scribbly overlap, and Mapbox Directions may preserve those
+  // artifacts as ugly zigzags. This keeps one clean lap, then repeats that lap
+  // according to the detected lap count.
+  const loopRoute = await fetchCircularizedLoopRoute({
+    loopPoints: pattern.loopPoints,
+    loopEntry: pattern.loopEntry,
+    estimatedLapCount: pattern.estimatedLapCount,
+    token,
+    signal,
+  });
   throwIfCourseSearchAborted(signal);
 
   const returnPolyline = reversePolyline(stemRoute.polyline);
