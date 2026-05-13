@@ -684,6 +684,247 @@ function getRepeatedLoopSignal(points: LngLat[]): {
   };
 }
 
+
+type OutAndBackRepeatedLoopPattern = {
+  stemPoints: LngLat[];
+  loopPoints: LngLat[];
+  loopEntry: LngLat;
+  estimatedLapCount: number;
+  stemDistanceM: number;
+  loopDistanceM: number;
+  returnMatchAverageM: number;
+};
+
+function reversePolyline(polyline: LngLat[]): LngLat[] {
+  return [...polyline].reverse();
+}
+
+function estimateLoopLapCountByAngle(points: LngLat[]): number {
+  if (points.length < 10) return 1;
+
+  const center = getDrawnRouteCentroid(points);
+  const samples = samplePolylineEvenly(points, 96);
+  const angles = samples.map((point) => {
+    const local = toLocalMeters(point, center);
+    return Math.atan2(local.y, local.x);
+  });
+
+  if (angles.length < 3) return 1;
+
+  let totalAbsAngle = 0;
+
+  for (let index = 1; index < angles.length; index += 1) {
+    let delta = angles[index] - angles[index - 1];
+
+    while (delta > Math.PI) delta -= Math.PI * 2;
+    while (delta < -Math.PI) delta += Math.PI * 2;
+
+    totalAbsAngle += Math.abs(delta);
+  }
+
+  const lapCount = Math.round(totalAbsAngle / (Math.PI * 2));
+
+  return clampNumber(lapCount, 1, 5);
+}
+
+function detectOutAndBackRepeatedLoopPattern(
+  points: LngLat[]
+): OutAndBackRepeatedLoopPattern | null {
+  if (points.length < 28) return null;
+
+  const drawnDistanceM = getPolylineLengthM(points);
+  if (drawnDistanceM < 850) return null;
+
+  const samples = samplePolylineEvenly(
+    points,
+    clampNumber(Math.ceil(drawnDistanceM / 24) + 1, 44, 150)
+  );
+
+  if (samples.length < 36) return null;
+
+  const start = samples[0];
+  const finish = samples[samples.length - 1];
+  const endpointClosureM = haversineDistanceM(start, finish);
+  const endpointClosureLimitM = Math.min(220, Math.max(70, drawnDistanceM * 0.09));
+
+  // This composer is intentionally narrow: it targets the user's explicit case
+  // of going out from the start, doing one or more loops, and returning along
+  // the same stem. If the finish is not near the start, ordinary draw-route
+  // candidates remain the safer fallback.
+  if (endpointClosureM > endpointClosureLimitM) return null;
+
+  const maxStemCount = Math.min(
+    48,
+    Math.max(8, Math.floor((samples.length - 12) / 3))
+  );
+
+  let bestMatch: {
+    stemCount: number;
+    averageM: number;
+    maxM: number;
+    score: number;
+  } | null = null;
+
+  for (let stemCount = 5; stemCount <= maxStemCount; stemCount += 1) {
+    const stemPoints = samples.slice(0, stemCount);
+    const stemDistanceM = getPolylineLengthM(stemPoints);
+
+    if (stemDistanceM < 110) continue;
+
+    const distances = stemPoints.map((point, index) => {
+      const returnPoint = samples[samples.length - 1 - index];
+      return haversineDistanceM(point, returnPoint);
+    });
+    const averageM =
+      distances.reduce((acc, value) => acc + value, 0) / Math.max(1, distances.length);
+    const maxM = Math.max(...distances);
+    const allowedAverageM = Math.min(95, Math.max(38, stemDistanceM * 0.18));
+    const allowedMaxM = Math.min(190, Math.max(90, stemDistanceM * 0.35));
+
+    if (averageM > allowedAverageM || maxM > allowedMaxM) continue;
+
+    // Prefer a longer and cleaner out-and-back stem. This makes the composer
+    // choose the actual access path to the loop rather than a tiny closure near
+    // the start point.
+    const score = averageM + maxM * 0.28 - stemCount * 3.8;
+
+    if (!bestMatch || score < bestMatch.score) {
+      bestMatch = { stemCount, averageM, maxM, score };
+    }
+  }
+
+  if (!bestMatch) return null;
+
+  const stemPoints = samples.slice(0, bestMatch.stemCount);
+  const loopStartIndex = Math.max(0, bestMatch.stemCount - 1);
+  const loopEndIndex = Math.min(
+    samples.length - 1,
+    samples.length - bestMatch.stemCount
+  );
+
+  if (loopEndIndex - loopStartIndex < 10) return null;
+
+  const loopEntry = samples[loopStartIndex];
+  const rawLoopPoints = samples.slice(loopStartIndex, loopEndIndex + 1);
+  const loopDistanceM = getPolylineLengthM(rawLoopPoints);
+  const stemDistanceM = getPolylineLengthM(stemPoints);
+
+  if (loopDistanceM < 360 || stemDistanceM < 110) return null;
+
+  const loopClosureM = haversineDistanceM(
+    rawLoopPoints[0],
+    rawLoopPoints[rawLoopPoints.length - 1]
+  );
+  const loopClosureLimitM = Math.min(180, Math.max(60, loopDistanceM * 0.12));
+
+  if (loopClosureM > loopClosureLimitM) return null;
+
+  const loopSignal = getRepeatedLoopSignal(rawLoopPoints);
+  const angleLapCount = estimateLoopLapCountByAngle(rawLoopPoints);
+  const estimatedLapCount = Math.max(
+    1,
+    Math.min(5, Math.max(loopSignal.estimatedLapCount, angleLapCount))
+  );
+
+  // Require at least a loop-like body. A single lollipop loop is still allowed,
+  // but the branch is especially valuable when estimatedLapCount >= 2.
+  if (!loopSignal.hasRepeatedArea && angleLapCount < 1 && !hasOpenLoopGesture(rawLoopPoints)) {
+    return null;
+  }
+
+  return {
+    stemPoints,
+    loopPoints: rawLoopPoints,
+    loopEntry,
+    estimatedLapCount,
+    stemDistanceM,
+    loopDistanceM,
+    returnMatchAverageM: bestMatch.averageM,
+  };
+}
+
+function makeOrderedSegmentAttempt(
+  points: LngLat[],
+  options: {
+    maxPoints: number;
+    minDistanceM: number;
+    forceCloseTo?: LngLat;
+  }
+): LngLat[] {
+  if (points.length < 2) return points;
+
+  const distanceM = getPolylineLengthM(points);
+  const count = clampNumber(
+    Math.ceil(distanceM / options.minDistanceM) + 1,
+    3,
+    options.maxPoints
+  );
+  const sampled = samplePolylineEvenly(points, count);
+
+  if (options.forceCloseTo && sampled.length >= 2) {
+    sampled[sampled.length - 1] = options.forceCloseTo;
+  }
+
+  return compactWaypointAttempt(sampled, Math.max(10, options.minDistanceM * 0.45));
+}
+
+async function fetchOutAndBackRepeatedLoopRoute({
+  pattern,
+  token,
+  signal,
+}: {
+  pattern: OutAndBackRepeatedLoopPattern;
+  token: string;
+  signal?: AbortSignal;
+}): Promise<{ distanceM: number; polyline: LngLat[] }> {
+  throwIfCourseSearchAborted(signal);
+
+  const stemAttempt = makeOrderedSegmentAttempt(pattern.stemPoints, {
+    maxPoints: 7,
+    minDistanceM: 80,
+    forceCloseTo: pattern.loopEntry,
+  });
+
+  if (stemAttempt.length < 2) {
+    throw new Error("왕복 루프 진입 구간을 만들 수 없습니다.");
+  }
+
+  const loopAttempt = makeOrderedSegmentAttempt(pattern.loopPoints, {
+    maxPoints: pattern.estimatedLapCount >= 2 ? 23 : 18,
+    minDistanceM: pattern.estimatedLapCount >= 2 ? 70 : 85,
+    forceCloseTo: pattern.loopEntry,
+  });
+
+  if (loopAttempt.length < 4) {
+    throw new Error("반복 루프 구간을 만들 수 없습니다.");
+  }
+
+  const stemRoute = await fetchWalkingRouteBySegments(stemAttempt, token, signal);
+  throwIfCourseSearchAborted(signal);
+
+  const loopRoute = await fetchWalkingRouteBySegments(loopAttempt, token, signal);
+  throwIfCourseSearchAborted(signal);
+
+  const returnPolyline = reversePolyline(stemRoute.polyline);
+  const composedPolyline = removeConsecutiveDuplicatePoints([
+    ...stemRoute.polyline,
+    ...loopRoute.polyline.slice(1),
+    ...returnPolyline.slice(1),
+  ]);
+
+  const composedDistanceM =
+    stemRoute.distanceM * 2 + loopRoute.distanceM;
+
+  if (composedPolyline.length < 2 || composedDistanceM <= 0) {
+    throw new Error("왕복 루프 코스를 조립하지 못했습니다.");
+  }
+
+  return {
+    distanceM: composedDistanceM,
+    polyline: composedPolyline,
+  };
+}
+
 function hasOpenLoopGesture(points: LngLat[]): boolean {
   if (points.length < 18) return false;
 
@@ -1373,20 +1614,28 @@ async function generateDrawnRouteCandidates({
   const isCircular = isLikelyCircularDrawnRoute(drawnPoints);
   const hasOpenLoop = !isCircular && hasOpenLoopGesture(drawnPoints);
   const repeatedSignal = getRepeatedLoopSignal(drawnPoints);
-  const drawCandidateLabel = isCircular
-    ? repeatedSignal.estimatedLapCount >= 2
-      ? "반복 루프"
-      : "원형"
-    : hasOpenLoop
-      ? "루프 포함"
-      : "그리기";
+  const outAndBackLoopPattern = detectOutAndBackRepeatedLoopPattern(drawnPoints);
+  const drawCandidateLabel = outAndBackLoopPattern
+    ? outAndBackLoopPattern.estimatedLapCount >= 2
+      ? "왕복 반복 루프"
+      : "왕복 루프"
+    : isCircular
+      ? repeatedSignal.estimatedLapCount >= 2
+        ? "반복 루프"
+        : "원형"
+      : hasOpenLoop
+        ? "루프 포함"
+        : "그리기";
   const attempts = isCircular
     ? getLoopWaypointAttempts(drawnPoints)
     : getDrawRouteAttempts(drawnPoints);
   const loopPreservingAttempts =
-    hasOpenLoop || repeatedSignal.hasRepeatedArea || repeatedSignal.estimatedLapCount >= 2
+    outAndBackLoopPattern ||
+    hasOpenLoop ||
+    repeatedSignal.hasRepeatedArea ||
+    repeatedSignal.estimatedLapCount >= 2
       ? getLoopSegmentPreservingWaypointAttempts(drawnPoints, {
-          closeToStart: isCircular,
+          closeToStart: isCircular || Boolean(outAndBackLoopPattern),
         }).slice(0, 2)
       : [];
   const seenRoutes = new Set<string>();
@@ -1397,33 +1646,42 @@ async function generateDrawnRouteCandidates({
 
   const addRouteCandidate = (
     route: { distanceM: number; polyline: LngLat[] },
-    scoreMultiplier = 1
+    options: {
+      scoreMultiplier?: number;
+      label?: string;
+      forceTopRank?: boolean;
+      forceWithinTolerance?: boolean;
+    } = {}
   ) => {
     const key = makeDrawRouteCandidateKey(route);
     if (seenRoutes.has(key)) return;
     seenRoutes.add(key);
 
+    const scoreMultiplier = options.scoreMultiplier ?? 1;
     const distanceErrorM = Math.abs(route.distanceM - drawnDistanceM);
     const rawScore = calculateDrawRouteShapeScore({
       routePolyline: route.polyline,
       drawnPoints,
       distanceErrorM,
-      isCircular,
+      isCircular: isCircular || Boolean(outAndBackLoopPattern),
     });
-    const score = rawScore * scoreMultiplier;
+    const score = options.forceTopRank
+      ? -100_000 + scoredCandidates.length
+      : rawScore * scoreMultiplier;
+    const label = options.label ?? drawCandidateLabel;
 
     scoredCandidates.push({
       candidate: {
         id: `draw-route-candidate-${scoredCandidates.length + 1}`,
         candidateId: `draw-route-candidate-${scoredCandidates.length + 1}`,
-        name: `${drawCandidateLabel} 후보 ${scoredCandidates.length + 1}`,
+        name: `${label} 후보 ${scoredCandidates.length + 1}`,
         distanceM: route.distanceM,
         distanceErrorM,
-        isWithinTolerance: isCircular
+        isWithinTolerance: options.forceWithinTolerance || (isCircular
           ? score <= Math.max(900, drawnDistanceM * 0.72)
-          : score <= Math.max(650, drawnDistanceM * 0.48),
+          : score <= Math.max(650, drawnDistanceM * 0.48)),
         bearingDeg: 0,
-        endpoint: isCircular ? start : finish,
+        endpoint: isCircular || outAndBackLoopPattern ? start : finish,
         straightDistanceM: haversineDistanceM(start, finish),
         outboundDistanceM: route.distanceM,
         polyline: route.polyline,
@@ -1432,13 +1690,40 @@ async function generateDrawnRouteCandidates({
     });
   };
 
+  if (outAndBackLoopPattern) {
+    try {
+      const route = await fetchOutAndBackRepeatedLoopRoute({
+        pattern: outAndBackLoopPattern,
+        token,
+        signal,
+      });
+      throwIfCourseSearchAborted(signal);
+      addRouteCandidate(route, {
+        label: outAndBackLoopPattern.estimatedLapCount >= 2
+          ? `왕복 ${outAndBackLoopPattern.estimatedLapCount}바퀴 루프`
+          : "왕복 루프",
+        forceTopRank: true,
+        forceWithinTolerance: true,
+      });
+    } catch (error) {
+      if (isCourseSearchAbortError(error)) {
+        throw error;
+      }
+
+      console.warn("Failed to generate out-and-back repeated loop candidate:", {
+        pattern: outAndBackLoopPattern,
+        error,
+      });
+    }
+  }
+
   for (const attempt of loopPreservingAttempts) {
     throwIfCourseSearchAborted(signal);
 
     try {
       const route = await fetchWalkingRouteBySegments(attempt, token, signal);
       throwIfCourseSearchAborted(signal);
-      addRouteCandidate(route, 0.72);
+      addRouteCandidate(route, { scoreMultiplier: 0.72 });
     } catch (error) {
       if (isCourseSearchAbortError(error)) {
         throw error;
@@ -1488,12 +1773,16 @@ async function generateDrawnRouteCandidates({
       return a.score - b.score;
     })
     .slice(0, MAX_ONE_WAY_CANDIDATES_TO_RETURN)
-    .map(({ candidate }, index) => ({
-      ...candidate,
-      id: `draw-route-candidate-${index + 1}`,
-      candidateId: `draw-route-candidate-${index + 1}`,
-      name: `${drawCandidateLabel} 후보 ${index + 1}`,
-    }));
+    .map(({ candidate }, index) => {
+      const baseName = candidate.name.replace(/ 후보 \d+$/, "");
+
+      return {
+        ...candidate,
+        id: `draw-route-candidate-${index + 1}`,
+        candidateId: `draw-route-candidate-${index + 1}`,
+        name: `${baseName} 후보 ${index + 1}`,
+      };
+    });
 }
 
 function parsePaceInput(input: string): number {
