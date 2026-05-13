@@ -2174,6 +2174,12 @@ export default function RaceMap() {
     setStatus(`${course.name} 코스를 지도에 표시했습니다.`);
   }
 
+  function handleRunStoredCourse(course: StoredCourseRecord) {
+    applyStoredCourse(course);
+    setIsRunSettingsOpen(true);
+    setStatus(`${course.name} 코스로 러닝 설정을 확인하세요.`);
+  }
+
   function deleteStoredCourse(courseId: string) {
     const target = courseLibrary.find((course) => course.courseId === courseId);
 
@@ -2223,6 +2229,19 @@ export default function RaceMap() {
 
     setRunRecords((current) =>
       current.filter((record) => record.runId !== runId)
+    );
+  }
+  function updateRunRecordName(runId: string, name: string) {
+    setRunRecords((current) =>
+      current.map((record) =>
+        record.runId === runId
+          ? {
+              ...record,
+              courseName: name,
+              updatedAt: Date.now(),
+            }
+          : record
+      )
     );
   }
 
@@ -3525,9 +3544,35 @@ export default function RaceMap() {
               </span>
             </div>
 
-            <div className="text-sm font-black text-slate-900">
-              {record.courseName}
-            </div>
+            <label
+              className="mt-1 block space-y-1"
+              onClick={(event) => event.stopPropagation()}
+              onKeyDown={(event) => event.stopPropagation()}
+            >
+              <div className="text-[10px] font-semibold text-slate-400">
+                기록 이름
+              </div>
+
+              <input
+                value={record.courseName}
+                onChange={(event) =>
+                  updateRunRecordName(record.runId, event.target.value)
+                }
+                onBlur={(event) => {
+                  const trimmedName = event.target.value.trim();
+
+                  if (!trimmedName) {
+                    updateRunRecordName(record.runId, "완주 기록");
+                    return;
+                  }
+
+                  if (trimmedName !== event.target.value) {
+                    updateRunRecordName(record.runId, trimmedName);
+                  }
+                }}
+                className="w-full rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm font-black text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              />
+            </label>
 
             <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-600">
               <div className="rounded-xl bg-slate-50 px-2 py-1.5">
@@ -3585,16 +3630,7 @@ export default function RaceMap() {
     return (
       <div
         key={`${variant}-${course.courseId}`}
-        role="button"
-        tabIndex={0}
-        onClick={() => applyStoredCourse(course)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            applyStoredCourse(course);
-          }
-        }}
-        className={`cursor-pointer rounded-2xl border p-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
+        className={`rounded-2xl border p-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
           isFavoriteCard
             ? "border-yellow-200 bg-gradient-to-br from-yellow-50 via-white to-orange-50 hover:border-yellow-300"
             : "border-slate-200 bg-white hover:border-blue-300 hover:bg-blue-50"
@@ -3672,9 +3708,25 @@ export default function RaceMap() {
             )}
 
             <div className="mt-2 text-[11px] font-bold text-blue-700">
-              {isFavoriteCard
-                ? "누르면 지도에서 바로 다시 뛸 수 있습니다."
-                : "저장 코스를 누르면 지도에서 다시 불러옵니다."}
+              지도에서 먼저 확인하거나, 바로 러닝 설정으로 이동할 수 있습니다.
+            </div>
+
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => applyStoredCourse(course)}
+                className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-700 transition hover:bg-slate-200"
+              >
+                지도에서 보기
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleRunStoredCourse(course)}
+                className="rounded-xl bg-blue-600 px-3 py-2 text-xs font-black text-white shadow-sm transition hover:bg-blue-700"
+              >
+                이 코스로 달리기
+              </button>
             </div>
           </div>
 
