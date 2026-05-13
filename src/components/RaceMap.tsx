@@ -1062,6 +1062,10 @@ export default function RaceMap() {
     return getSortedSavedCourses(savedCourses);
   }, [savedCourses]);
 
+  const favoriteSavedCourses = useMemo(() => {
+    return sortedSavedCourses.filter((course) => course.favorite);
+  }, [sortedSavedCourses]);
+
   const sortedCustomCourses = useMemo(() => {
     return getSortedCustomCourses(customCourses);
   }, [customCourses]);
@@ -3083,6 +3087,128 @@ export default function RaceMap() {
     );
   }
 
+
+  function renderSavedCourseCard(
+    course: SavedCourseRecord,
+    variant: "favorite" | "history" = "history"
+  ) {
+    const isFavoriteCard = variant === "favorite";
+
+    return (
+      <div
+        key={`${variant}-${course.savedId}`}
+        role="button"
+        tabIndex={0}
+        onClick={() => applySavedCourse(course)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            applySavedCourse(course);
+          }
+        }}
+        className={`cursor-pointer rounded-2xl border p-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
+          isFavoriteCard
+            ? "border-yellow-200 bg-gradient-to-br from-yellow-50 via-white to-orange-50 hover:border-yellow-300"
+            : "border-slate-200 bg-white hover:border-blue-300 hover:bg-blue-50"
+        }`}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="mb-2 flex flex-wrap items-center gap-1.5">
+              {isFavoriteCard && (
+                <span className="rounded-full bg-yellow-400 px-2 py-0.5 text-[10px] font-black text-yellow-950">
+                  자주 뛸 코스
+                </span>
+              )}
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">
+                {getSavedCourseModeLabel(course.courseMode)}
+              </span>
+              <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-700">
+                {(course.distanceM / 1000).toFixed(2)}km
+              </span>
+            </div>
+
+            <label
+              className="block space-y-1"
+              onClick={(event) => event.stopPropagation()}
+              onKeyDown={(event) => event.stopPropagation()}
+            >
+              <div className="text-[11px] font-semibold text-slate-500">
+                코스 이름
+              </div>
+              <input
+                value={course.name}
+                onChange={(event) =>
+                  updateSavedCourseName(course.savedId, event.target.value)
+                }
+                className="w-full rounded-xl border border-slate-200 bg-white/90 px-3 py-2 text-sm font-bold text-slate-900 outline-none transition focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100"
+              />
+            </label>
+
+            <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-600">
+              <div className="rounded-xl bg-slate-50 px-2 py-1.5">
+                <div className="text-[10px] font-semibold text-slate-400">
+                  완료 시간
+                </div>
+                <div className="font-bold text-slate-800">
+                  {formatCompletedTime(course.completedAt)}
+                </div>
+              </div>
+              <div className="rounded-xl bg-slate-50 px-2 py-1.5">
+                <div className="text-[10px] font-semibold text-slate-400">
+                  기록
+                </div>
+                <div className="font-bold text-slate-800">
+                  {formatDuration(course.elapsedSec)}
+                </div>
+              </div>
+            </div>
+
+            {course.turnaround && (
+              <div className="mt-2 rounded-xl bg-orange-50 px-2 py-1.5 text-[11px] font-semibold text-orange-700">
+                반환점: {formatPoint(course.turnaround)}
+              </div>
+            )}
+
+            <div className="mt-2 text-[11px] font-bold text-blue-700">
+              {isFavoriteCard
+                ? "누르면 지도에서 바로 다시 뛸 수 있습니다."
+                : "기록을 누르면 해당 코스를 지도에서 볼 수 있습니다."}
+            </div>
+          </div>
+
+          <div className="flex shrink-0 flex-col gap-1.5">
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                toggleSavedCourseFavorite(course.savedId);
+              }}
+              className={`rounded-xl px-2 py-2 text-xs font-black transition ${
+                course.favorite
+                  ? "bg-yellow-400 text-yellow-950 hover:bg-yellow-300"
+                  : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+              }`}
+            >
+              {course.favorite ? "★" : "☆"}
+            </button>
+
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                deleteSavedCourse(course.savedId);
+              }}
+              className="rounded-xl bg-red-50 px-2 py-2 text-xs font-bold text-red-700 hover:bg-red-100"
+            >
+              삭제
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="race-root">
       <div ref={mapContainerRef} className="race-map" />
@@ -3555,104 +3681,81 @@ export default function RaceMap() {
             </div>
 
             {sortedSavedCourses.length === 0 ? (
-              <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-600">
-                아직 완주 기록이 없습니다. 왕복 코스 또는 편도 코스를 선택한 뒤
-                레이스를 완주하면 이곳에 자동으로 저장됩니다.
+              <div className="rounded-2xl border border-dashed border-slate-300 bg-white/85 p-5 text-center shadow-sm">
+                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-blue-50 text-xl">
+                  🏃
+                </div>
+                <div className="mt-3 text-sm font-black text-slate-900">
+                  아직 완주 기록이 없습니다.
+                </div>
+                <div className="mt-1 text-sm text-slate-600">
+                  왕복 코스, 편도 코스 또는 커스텀 코스를 선택하고 한 번 완주하면
+                  이곳에 기록이 자동으로 쌓입니다.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSetupView("main")}
+                  className="mt-4 rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white"
+                >
+                  코스 찾으러 가기
+                </button>
               </div>
             ) : (
-              <div className="space-y-4">
-                {savedCourseGroups.map((group) => (
-                  <div key={group.dateLabel} className="space-y-2">
-                    <div className="px-1 text-xs font-bold text-slate-500">
-                      {group.dateLabel}
+              <div className="space-y-5">
+                {favoriteSavedCourses.length > 0 && (
+                  <section className="rounded-3xl border border-yellow-200 bg-gradient-to-br from-yellow-50 via-white to-orange-50 p-3 shadow-sm">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-2 text-sm font-black text-slate-900">
+                          <span>★</span>
+                          <span>자주 뛸 코스</span>
+                        </div>
+                        <div className="text-xs text-slate-600">
+                          즐겨찾기한 완주 코스를 빠르게 다시 불러옵니다.
+                        </div>
+                      </div>
+                      <span className="rounded-full bg-yellow-400 px-2 py-1 text-[11px] font-black text-yellow-950">
+                        {favoriteSavedCourses.length}개
+                      </span>
                     </div>
 
-                    {group.courses.map((course) => (
-                      <div
-                        key={course.savedId}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => applySavedCourse(course)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" || event.key === " ") {
-                            event.preventDefault();
-                            applySavedCourse(course);
-                          }
-                        }}
-                        className="cursor-pointer rounded-xl border border-slate-200 bg-white p-3 transition hover:border-blue-300 hover:bg-blue-50"
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0 flex-1">
-                            <label
-                              className="block space-y-1"
-                              onClick={(event) => event.stopPropagation()}
-                              onKeyDown={(event) => event.stopPropagation()}
-                            >
-                              <div className="text-[11px] font-semibold text-slate-500">
-                                코스 이름
-                              </div>
-                              <input
-                                value={course.name}
-                                onChange={(event) =>
-                                  updateSavedCourseName(
-                                    course.savedId,
-                                    event.target.value
-                                  )
-                                }
-                                className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm font-semibold text-slate-900 outline-none focus:border-blue-500"
-                              />
-                            </label>
+                    <div className="space-y-2">
+                      {favoriteSavedCourses.map((course) =>
+                        renderSavedCourseCard(course, "favorite")
+                      )}
+                    </div>
+                  </section>
+                )}
 
-                            <div className="mt-2 text-xs text-slate-500">
-                              {formatCompletedTime(course.completedAt)} 완료 ·
-                              {(course.distanceM / 1000).toFixed(2)} km ·
-                              {getSavedCourseModeLabel(course.courseMode)} · 기록
-                              {formatDuration(course.elapsedSec)}
-                            </div>
+                <section className="space-y-3">
+                  <div className="flex items-end justify-between gap-2 px-1">
+                    <div>
+                      <div className="text-sm font-black text-slate-900">
+                        완주 기록
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        날짜별 전체 히스토리입니다. 즐겨찾기한 코스도 기록에는 그대로 남습니다.
+                      </div>
+                    </div>
+                    <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-bold text-slate-600">
+                      총 {sortedSavedCourses.length}회
+                    </span>
+                  </div>
 
-                            {course.turnaround && (
-                              <div className="mt-1 text-[11px] text-orange-700">
-                                반환점: {formatPoint(course.turnaround)}
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="flex shrink-0 flex-col gap-1">
-                            <button
-                              type="button"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                toggleSavedCourseFavorite(course.savedId);
-                              }}
-                              className={`rounded-lg px-2 py-2 text-xs font-semibold ${
-                                course.favorite
-                                  ? "bg-yellow-100 text-yellow-800"
-                                  : "bg-slate-100 text-slate-700"
-                              }`}
-                            >
-                              {course.favorite ? "★ 즐겨찾기" : "☆ 즐겨찾기"}
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                deleteSavedCourse(course.savedId);
-                              }}
-                              className="rounded-lg bg-red-50 px-2 py-2 text-xs font-semibold text-red-700"
-                            >
-                              삭제
-                            </button>
-                          </div>
+                  <div className="space-y-4">
+                    {savedCourseGroups.map((group) => (
+                      <div key={group.dateLabel} className="space-y-2">
+                        <div className="sticky top-20 z-10 rounded-full bg-slate-900 px-3 py-1.5 text-xs font-black text-white shadow-sm">
+                          {group.dateLabel}
                         </div>
 
-                        <div className="mt-2 text-[11px] font-semibold text-blue-700">
-                          기록을 누르면 해당 코스를 지도에서 볼 수 있습니다.
-                        </div>
+                        {group.courses.map((course) =>
+                          renderSavedCourseCard(course, "history")
+                        )}
                       </div>
                     ))}
                   </div>
-                ))}
+                </section>
               </div>
             )}
           </div>
