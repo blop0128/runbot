@@ -575,6 +575,141 @@ function isLikelyCircularDrawnRoute(points: LngLat[]): boolean {
   return closureDistanceM <= closureLimitM;
 }
 
+function getRepeatedLoopSignal(points: LngLat[]): {
+  hasRepeatedArea: boolean;
+  revisitCount: number;
+  estimatedLapCount: number;
+} {
+  if (points.length < 16) {
+    return { hasRepeatedArea: false, revisitCount: 0, estimatedLapCount: 1 };
+  }
+
+  const drawnDistanceM = getPolylineLengthM(points);
+  const samples = samplePolylineEvenly(
+    points,
+    clampNumber(Math.ceil(drawnDistanceM / 28) + 1, 18, 180)
+  );
+
+  if (samples.length < 16) {
+    return { hasRepeatedArea: false, revisitCount: 0, estimatedLapCount: 1 };
+  }
+
+  const origin = samples[0];
+  const cellSizeM = 46;
+  const visited = new Map<string, number>();
+  let revisitCount = 0;
+
+  samples.forEach((point, index) => {
+    const local = toLocalMeters(point, origin);
+    const key = `${Math.round(local.x / cellSizeM)},${Math.round(local.y / cellSizeM)}`;
+    const previousIndex = visited.get(key);
+
+    if (previousIndex !== undefined && index - previousIndex >= 8) {
+      revisitCount += 1;
+      return;
+    }
+
+    if (previousIndex === undefined) {
+      visited.set(key, index);
+    }
+  });
+
+  const revisitRatio = revisitCount / samples.length;
+  const estimatedLapCount = Math.max(
+    1,
+    Math.min(4, Math.round(1 + revisitRatio * 4.2))
+  );
+
+  return {
+    hasRepeatedArea: revisitCount >= 4 && revisitRatio >= 0.10,
+    revisitCount,
+    estimatedLapCount,
+  };
+}
+
+function hasOpenLoopGesture(points: LngLat[]): boolean {
+  if (points.length < 18) return false;
+
+  const drawnDistanceM = getPolylineLengthM(points);
+  if (drawnDistanceM < 650) return false;
+
+  const samples = samplePolylineEvenly(
+    points,
+    clampNumber(Math.ceil(drawnDistanceM / 35) + 1, 18, 150)
+  );
+
+  if (samples.length < 18) return false;
+
+  for (let index = 8; index < samples.length; index += 1) {
+    const current = samples[index];
+    const priorLimit = Math.max(0, index - 7);
+
+    for (let priorIndex = 0; priorIndex < priorLimit; priorIndex += 1) {
+      const distanceM = haversineDistanceM(current, samples[priorIndex]);
+
+      if (distanceM <= 95) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function compactWaypointAttempt(
+  attempt: LngLat[],
+  minDistanceM = 35
+): LngLat[] {
+  const compact: LngLat[] = [];
+
+  attempt.forEach((point, index) => {
+    const previous = compact[compact.length - 1];
+    const isEndpoint = index === 0 || index === attempt.length - 1;
+
+    if (!previous || isEndpoint || haversineDistanceM(previous, point) >= minDistanceM) {
+      compact.push(point);
+    }
+  });
+
+  return compact;
+}
+
+function getShapePreservingWaypointAttempts(
+  points: LngLat[],
+  options: { closeToStart: boolean }
+): LngLat[][] {
+  if (points.length < 2) return [];
+
+  const start = points[0];
+  const finish = options.closeToStart ? start : points[points.length - 1];
+  const drawnDistanceM = getPolylineLengthM(points);
+  const baseCounts = drawnDistanceM >= 3200
+    ? [8, 10, 12, 14, 16]
+    : drawnDistanceM >= 1800
+      ? [6, 8, 10, 12]
+      : [5, 6, 8, 10];
+
+  const attempts = baseCounts.map((count) => {
+    const sampled = samplePolylineEvenly(points, count);
+
+    if (sampled.length >= 2) {
+      sampled[0] = start;
+      sampled[sampled.length - 1] = finish;
+    }
+
+    return compactWaypointAttempt(sampled, drawnDistanceM >= 2500 ? 45 : 35);
+  });
+
+  const dense = getDrawRouteWaypointSamples(points);
+  if (dense.length >= 2) {
+    dense[0] = start;
+    dense[dense.length - 1] = finish;
+    attempts.push(compactWaypointAttempt(dense, 35));
+  }
+
+  return attempts.filter((attempt) => attempt.length >= 2);
+}
+
 function getLoopWaypointAttempts(points: LngLat[]): LngLat[][] {
   if (points.length < 2) return [];
 
@@ -590,6 +725,12 @@ function getLoopWaypointAttempts(points: LngLat[]): LngLat[][] {
     return [...sampled, start];
   });
 
+  // If the user draws a circular loop more than once, or draws a lollipop-style
+  // loop with an approach section, sparse 4~6 point attempts collapse the loop.
+  // These shape-preserving attempts sample the whole gesture in order, so repeated
+  // laps and local loop portions can survive as ordered Mapbox waypoints.
+  attempts.push(...getShapePreservingWaypointAttempts(points, { closeToStart: true }));
+
   const simplified = samplePolylineEvenly(points, 8);
   if (simplified.length >= 4) {
     attempts.push([...simplified.slice(0, -1), start]);
@@ -599,15 +740,7 @@ function getLoopWaypointAttempts(points: LngLat[]): LngLat[][] {
 
   return attempts
     .map((attempt) => {
-      const compact: LngLat[] = [];
-
-      attempt.forEach((point, index) => {
-        const previous = compact[compact.length - 1];
-
-        if (!previous || haversineDistanceM(previous, point) >= 35 || index === attempt.length - 1) {
-          compact.push(point);
-        }
-      });
+      const compact = compactWaypointAttempt(attempt, 35);
 
       if (compact.length >= 2) {
         compact[0] = start;
@@ -863,6 +996,52 @@ function calculateDrawCorridorMetrics({
   };
 }
 
+function calculateDrawCoverageMetrics({
+  routePolyline,
+  drawnPoints,
+  isCircular,
+}: {
+  routePolyline: LngLat[];
+  drawnPoints: LngLat[];
+  isCircular: boolean;
+}): {
+  averageUncoveredM: number;
+  maxUncoveredM: number;
+  uncoveredRatio: number;
+} {
+  const drawnDistanceM = getPolylineLengthM(drawnPoints);
+  const radiusStats = getDrawnRouteRadiusStats(drawnPoints);
+  const drawnSamples = samplePolylineEvenly(drawnPoints, isCircular ? 96 : 84);
+  const routeSamples = samplePolylineEvenly(routePolyline, isCircular ? 96 : 84);
+
+  if (drawnSamples.length === 0 || routeSamples.length === 0) {
+    return {
+      averageUncoveredM: Number.POSITIVE_INFINITY,
+      maxUncoveredM: Number.POSITIVE_INFINITY,
+      uncoveredRatio: 1,
+    };
+  }
+
+  const toleranceM = isCircular
+    ? clampNumber(radiusStats.averageRadiusM * 0.34, 65, 210)
+    : clampNumber(drawnDistanceM * 0.10, 55, 180);
+  const distances = drawnSamples.map((point) =>
+    minDistanceToPolylineSamplesM(point, routeSamples)
+  );
+  const uncoveredDistances = distances.map((distanceM) =>
+    Math.max(0, distanceM - toleranceM)
+  );
+
+  return {
+    averageUncoveredM:
+      uncoveredDistances.reduce((acc, value) => acc + value, 0) /
+      uncoveredDistances.length,
+    maxUncoveredM: Math.max(...uncoveredDistances),
+    uncoveredRatio:
+      uncoveredDistances.filter((value) => value > 0).length / uncoveredDistances.length,
+  };
+}
+
 function calculateLoopClosurePenaltyM({
   routePolyline,
   drawnPoints,
@@ -911,6 +1090,12 @@ function calculateDrawRouteShapeScore({
     drawnPoints,
     isCircular,
   });
+  const coverage = calculateDrawCoverageMetrics({
+    routePolyline,
+    drawnPoints,
+    isCircular,
+  });
+  const repeatedSignal = getRepeatedLoopSignal(drawnPoints);
   const repeatedPathPenaltyM = calculateRepeatedPathPenaltyM(routePolyline);
   const sharpTurnPenaltyM = calculateSharpTurnPenaltyM(routePolyline);
   const progressPenaltyM = calculateDrawProgressPenaltyM({
@@ -924,14 +1109,22 @@ function calculateDrawRouteShapeScore({
     isCircular,
   });
   const drawnDistanceM = Math.max(getPolylineLengthM(drawnPoints), 1);
+  const routeDistanceM = Math.max(getPolylineLengthM(routePolyline), 1);
+  const repeatedLoopDistancePenaltyM = repeatedSignal.hasRepeatedArea
+    ? Math.max(0, drawnDistanceM - routeDistanceM) * 1.20
+    : 0;
 
   return (
-    distanceErrorM * 0.55 +
-    corridor.averageDistanceM * 1.80 +
-    corridor.maxDistanceM * 0.42 +
-    corridor.averageOutsideM * 5.60 +
-    corridor.maxOutsideM * 1.35 +
-    corridor.outsideRatio * drawnDistanceM * 0.95 +
+    distanceErrorM * 0.72 +
+    corridor.averageDistanceM * 1.55 +
+    corridor.maxDistanceM * 0.38 +
+    corridor.averageOutsideM * 5.80 +
+    corridor.maxOutsideM * 1.30 +
+    corridor.outsideRatio * drawnDistanceM * 0.92 +
+    coverage.averageUncoveredM * 4.60 +
+    coverage.maxUncoveredM * 1.15 +
+    coverage.uncoveredRatio * drawnDistanceM * 1.05 +
+    repeatedLoopDistancePenaltyM +
     repeatedPathPenaltyM +
     sharpTurnPenaltyM +
     progressPenaltyM +
@@ -983,10 +1176,19 @@ function getDrawRouteAttempts(points: LngLat[]): LngLat[][] {
     attempts.push(getDrawRouteWaypointSamples(points));
   }
 
+  // Open loops, lollipop routes, and loop-with-tail sketches need ordered
+  // waypoint attempts. Otherwise the route generator may connect the first and
+  // last point by a shortcut and ignore the loop portion.
+  attempts.push(...getShapePreservingWaypointAttempts(points, { closeToStart: false }));
+
+  if (hasOpenLoopGesture(points)) {
+    attempts.push(...getShapePreservingWaypointAttempts(points, { closeToStart: false }));
+  }
+
   const seen = new Set<string>();
 
   return attempts
-    .map(removeConsecutiveDuplicatePoints)
+    .map((attempt) => compactWaypointAttempt(removeConsecutiveDuplicatePoints(attempt), 32))
     .filter((attempt) => {
       if (attempt.length < 2) return false;
 
@@ -1023,6 +1225,15 @@ async function generateDrawnRouteCandidates({
     haversineDistanceM(start, finish)
   );
   const isCircular = isLikelyCircularDrawnRoute(drawnPoints);
+  const hasOpenLoop = !isCircular && hasOpenLoopGesture(drawnPoints);
+  const repeatedSignal = getRepeatedLoopSignal(drawnPoints);
+  const drawCandidateLabel = isCircular
+    ? repeatedSignal.estimatedLapCount >= 2
+      ? "반복 루프"
+      : "원형"
+    : hasOpenLoop
+      ? "루프 포함"
+      : "그리기";
   const attempts = isCircular
     ? getLoopWaypointAttempts(drawnPoints)
     : getDrawRouteAttempts(drawnPoints);
@@ -1062,7 +1273,7 @@ async function generateDrawnRouteCandidates({
           candidate: {
             id: `draw-route-candidate-${scoredCandidates.length + 1}`,
             candidateId: `draw-route-candidate-${scoredCandidates.length + 1}`,
-            name: `${isCircular ? "원형" : "그리기"} 후보 ${scoredCandidates.length + 1}`,
+            name: `${drawCandidateLabel} 후보 ${scoredCandidates.length + 1}`,
             distanceM: route.distanceM,
             distanceErrorM,
             isWithinTolerance: isCircular
@@ -1102,7 +1313,7 @@ async function generateDrawnRouteCandidates({
       ...candidate,
       id: `draw-route-candidate-${index + 1}`,
       candidateId: `draw-route-candidate-${index + 1}`,
-      name: `${isCircular ? "원형" : "그리기"} 후보 ${index + 1}`,
+      name: `${drawCandidateLabel} 후보 ${index + 1}`,
     }));
 }
 
