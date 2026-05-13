@@ -4910,21 +4910,26 @@ export default function RaceMap() {
           background:
             linear-gradient(
               135deg,
-              rgba(248, 250, 252, 0.62),
-              rgba(239, 246, 255, 0.46),
-              rgba(236, 253, 245, 0.50)
+              rgba(248, 250, 252, 0.34),
+              rgba(239, 246, 255, 0.24),
+              rgba(236, 253, 245, 0.28)
             ),
             radial-gradient(
-              circle at top left,
-              rgba(59, 130, 246, 0.16),
-              transparent 34%
+              circle at top center,
+              rgba(255, 255, 255, 0.10),
+              transparent 36%
             ),
             radial-gradient(
               circle at bottom right,
-              rgba(34, 197, 94, 0.16),
-              transparent 32%
+              rgba(15, 23, 42, 0.18),
+              transparent 44%
+            ),
+            linear-gradient(
+              to bottom,
+              rgba(15, 23, 42, 0.08),
+              rgba(15, 23, 42, 0.16)
             );
-          backdrop-filter: blur(1.2px);
+          backdrop-filter: blur(0.6px);
           pointer-events: none;
         }
 
