@@ -2281,6 +2281,9 @@ export default function RaceMap() {
     return getPolylineLengthM(drawnRoutePoints);
   }, [drawnRoutePoints]);
 
+  const canGenerateDrawnRouteCandidates =
+    drawnRoutePoints.length >= 2 && !isGeneratingAnyCourse;
+
   const isAutoLoopPanelVisible =
     isGeneratingAutoLoop ||
     isGeneratingOneWay ||
@@ -6775,6 +6778,17 @@ export default function RaceMap() {
             </div>
 
             <div className="flex shrink-0 gap-1">
+              {isDrawPanelCollapsed && drawnRoutePoints.length >= 2 && (
+                <button
+                  type="button"
+                  onClick={handleGenerateDrawnRouteCandidates}
+                  disabled={!canGenerateDrawnRouteCandidates}
+                  className="candidate-sheet-control-button candidate-sheet-control-button-primary disabled:cursor-not-allowed"
+                >
+                  후보 찾기
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => setIsDrawPanelCollapsed((value) => !value)}
@@ -6825,29 +6839,14 @@ export default function RaceMap() {
                     지도 이동 모드
                   </button>
                 </div>
-                <div className="mt-2 text-[11px] font-semibold leading-relaxed text-slate-500">
-                  그리기 모드에서는 한 손가락으로 코스를 그리고, 두 손가락으로 확대/축소할 수 있습니다. 지도를 자유롭게 옮기려면 지도 이동 모드로 전환하세요.
-                </div>
               </div>
 
-              <div className="draw-route-summary-card">
+              <div className="draw-route-summary-card draw-route-summary-card-compact">
                 <div className="text-[11px] font-bold text-slate-500">
-                  그린 선 기준
+                  그린 선 길이
                 </div>
                 <div className="mt-1 text-lg font-black text-slate-950">
                   {formatDraftDistance(drawnRouteDistanceM)}
-                </div>
-                <div className="mt-1 text-[11px] font-semibold text-slate-500">
-                  원이 닫힌 형태로 그려지면 원형 코스 알고리즘을 우선 적용합니다. 시작점에서 출발해 그린 둘레의 4~6개 방향점을 순서대로 통과하고 다시 시작점으로 돌아오는 후보를 먼저 찾습니다.
-                </div>
-              </div>
-
-              <div className="draw-route-guide-card">
-                <div className="text-xs font-black text-slate-900">
-                  사용 방법
-                </div>
-                <div className="mt-1 text-[11px] font-semibold leading-relaxed text-slate-600">
-                  원형으로 둘러 달리고 싶으면 시작점 근처로 다시 돌아오게 닫힌 선을 그리세요. 지도 이동이 필요하면 지도 이동 모드로 전환하고, 확대/축소는 그리기 모드에서도 두 손가락으로 할 수 있습니다.
                 </div>
               </div>
 
@@ -6857,7 +6856,7 @@ export default function RaceMap() {
                 </div>
               )}
 
-              <div className="mt-3 grid grid-cols-2 gap-2">
+              <div className="draw-route-action-row grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   onClick={handleResetDrawRoute}
@@ -6870,7 +6869,7 @@ export default function RaceMap() {
                 <button
                   type="button"
                   onClick={handleGenerateDrawnRouteCandidates}
-                  disabled={drawnRoutePoints.length < 2 || isGeneratingAnyCourse}
+                  disabled={!canGenerateDrawnRouteCandidates}
                   className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
                   {isGeneratingDrawRouteCandidates ? "후보 찾는 중..." : "후보 찾기"}
@@ -10356,9 +10355,40 @@ export default function RaceMap() {
           z-index: 46 !important;
         }
 
-        .draw-route-mode-toggle-card + .draw-route-summary-card,
-        .draw-route-summary-card + .draw-route-guide-card {
+        .draw-route-mode-toggle-card + .draw-route-summary-card {
           margin-top: 10px;
+        }
+
+        .draw-route-summary-card-compact {
+          margin-bottom: 8px;
+        }
+
+        .draw-route-action-row {
+          position: sticky;
+          bottom: 0;
+          z-index: 3;
+          margin-top: 8px;
+          padding-top: 8px;
+          background:
+            linear-gradient(
+              180deg,
+              rgba(255, 255, 255, 0.10),
+              rgba(255, 255, 255, 0.68) 38%,
+              rgba(255, 255, 255, 0.86)
+            );
+          backdrop-filter: blur(18px) saturate(165%);
+          -webkit-backdrop-filter: blur(18px) saturate(165%);
+        }
+
+        .candidate-sheet-control-button-primary:not(:disabled) {
+          border-color: rgba(255, 255, 255, 0.52) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(15, 23, 42, 0.90),
+              rgba(30, 41, 59, 0.66)
+            ) !important;
+          color: rgba(255, 255, 255, 0.98) !important;
         }
 
         .race-draw-bottom-sheet .liquid-selected-control:not(:disabled),
