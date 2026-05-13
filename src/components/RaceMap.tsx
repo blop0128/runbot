@@ -280,55 +280,6 @@ function createCurrentLocationMarkerElement() {
   return wrapper;
 }
 
-function createRoutePointMarkerElement(label: string, color: string) {
-  const wrapper = document.createElement("div");
-  wrapper.style.display = "flex";
-  wrapper.style.flexDirection = "column";
-  wrapper.style.alignItems = "center";
-  wrapper.style.gap = "2px";
-
-  const dot = document.createElement("div");
-  dot.className = "route-point-dot";
-  dot.textContent = "↩";
-  dot.style.width = "34px";
-  dot.style.height = "34px";
-  dot.style.borderRadius = "9999px";
-  dot.style.background = color;
-  dot.style.color = "white";
-  dot.style.display = "flex";
-  dot.style.alignItems = "center";
-  dot.style.justifyContent = "center";
-  dot.style.fontSize = "17px";
-  dot.style.fontWeight = "900";
-  dot.style.border = "2px solid white";
-  dot.style.boxShadow = "0 4px 12px rgba(15, 23, 42, 0.28)";
-
-  const text = document.createElement("div");
-  text.textContent = label;
-  text.style.background = "rgba(15, 23, 42, 0.92)";
-  text.style.color = "white";
-  text.style.padding = "2px 6px";
-  text.style.borderRadius = "9999px";
-  text.style.fontSize = "11px";
-  text.style.fontWeight = "800";
-  text.style.whiteSpace = "nowrap";
-
-  wrapper.appendChild(dot);
-  wrapper.appendChild(text);
-
-  return wrapper;
-}
-
-function getRouteMidpoint(polyline: LngLat[]): LngLat | null {
-  const distanceM = getPolylineLengthM(polyline);
-
-  if (polyline.length < 2 || distanceM <= 1) {
-    return null;
-  }
-
-  return getLngLatAtDistance(polyline, distanceM / 2);
-}
-
 function getGpsStatusLabel(status: string): string {
   if (status === "idle") return "대기";
   if (status === "requesting") return "GPS 요청 중";
@@ -607,8 +558,6 @@ export default function RaceMap() {
   const finishMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const playerMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const currentLocationMarkerRef = useRef<mapboxgl.Marker | null>(null);
-  const activeCourseMidpointMarkerRef = useRef<mapboxgl.Marker | null>(null);
-  const previewCourseMidpointMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const botMarkerRefs = useRef<Record<string, mapboxgl.Marker>>({});
   const customPointMarkerRefs = useRef<
     Partial<Record<CustomPointStep, mapboxgl.Marker>>
@@ -928,88 +877,6 @@ export default function RaceMap() {
     }
   }
 
-  function updatePreviewCourseMidpointMarker(
-    candidate: AutoLoopCourseCandidate | null,
-    color: string
-  ) {
-    const map = mapRef.current;
-
-    if (!map || !candidate) {
-      previewCourseMidpointMarkerRef.current?.getElement().style.setProperty(
-        "display",
-        "none"
-      );
-      return;
-    }
-
-    const midpoint = getRouteMidpoint(candidate.polyline);
-
-    if (!midpoint) {
-      previewCourseMidpointMarkerRef.current?.getElement().style.setProperty(
-        "display",
-        "none"
-      );
-      return;
-    }
-
-    if (!previewCourseMidpointMarkerRef.current) {
-      previewCourseMidpointMarkerRef.current = new mapboxgl.Marker({
-        element: createRoutePointMarkerElement("반환점", color),
-        anchor: "bottom",
-      })
-        .setLngLat(midpoint)
-        .setPopup(new mapboxgl.Popup().setText("반환점 / 후보 코스 중간지점"))
-        .addTo(map);
-    } else {
-      previewCourseMidpointMarkerRef.current.setLngLat(midpoint);
-      previewCourseMidpointMarkerRef.current
-        .getElement()
-        .style.setProperty("display", "flex");
-
-      const dot =
-        previewCourseMidpointMarkerRef.current.getElement().querySelector(
-          ".route-point-dot"
-        ) as HTMLDivElement | null;
-
-      if (dot) {
-        dot.style.background = color;
-      }
-    }
-  }
-
-  function updateActiveCourseMidpointMarker(course: Course) {
-    const map = mapRef.current;
-
-    if (!map) return;
-
-    const midpoint = isRunnableCourse(course)
-      ? getRouteMidpoint(course.polyline)
-      : null;
-
-    if (!midpoint) {
-      activeCourseMidpointMarkerRef.current?.getElement().style.setProperty(
-        "display",
-        "none"
-      );
-      return;
-    }
-
-    if (!activeCourseMidpointMarkerRef.current) {
-      activeCourseMidpointMarkerRef.current = new mapboxgl.Marker({
-        element: createRoutePointMarkerElement("반환점", "#f97316"),
-        anchor: "bottom",
-      })
-        .setLngLat(midpoint)
-        .setPopup(new mapboxgl.Popup().setText("반환점 / 코스 중간지점"))
-        .addTo(map);
-    } else {
-      activeCourseMidpointMarkerRef.current.setLngLat(midpoint);
-      activeCourseMidpointMarkerRef.current
-        .getElement()
-        .style.setProperty("display", "flex");
-    }
-  }
-
   function updateAutoLoopCandidateOverlay(
     candidate: AutoLoopCourseCandidate | null,
     color: string
@@ -1053,7 +920,6 @@ export default function RaceMap() {
     }
 
     updateAutoLoopCandidateArrowOverlay(candidate, color);
-    updatePreviewCourseMidpointMarker(candidate, color);
   }
 
   function clearAutoLoopCandidateOverlay() {
@@ -1075,11 +941,6 @@ export default function RaceMap() {
     if (arrowSource) {
       arrowSource.setData(makeEmptyPointFeatureCollection());
     }
-
-    previewCourseMidpointMarkerRef.current?.getElement().style.setProperty(
-      "display",
-      "none"
-    );
   }
 
   function clearAutoLoopCandidates() {
@@ -1742,12 +1603,6 @@ export default function RaceMap() {
       currentLocationMarkerRef.current?.remove();
       currentLocationMarkerRef.current = null;
 
-      activeCourseMidpointMarkerRef.current?.remove();
-      activeCourseMidpointMarkerRef.current = null;
-
-      previewCourseMidpointMarkerRef.current?.remove();
-      previewCourseMidpointMarkerRef.current = null;
-
       Object.values(botMarkerRefs.current).forEach((marker) => marker.remove());
       botMarkerRefs.current = {};
 
@@ -1767,7 +1622,6 @@ export default function RaceMap() {
     }
 
     resetMarkersToCourseStart(activeCourse);
-    updateActiveCourseMidpointMarker(activeCourse);
 
     setRunnerHud(createInitialHud());
     setElapsedSec(0);
