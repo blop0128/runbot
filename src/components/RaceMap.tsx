@@ -84,6 +84,10 @@ const SAVED_COURSES_STORAGE_KEY = "runbot:savedCourses:v1";
 const AUTO_LOOP_PAGE_SIZE = 5;
 const AUTO_LOOP_COLORS = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#3b82f6"];
 
+const COURSE_ARROW_SYMBOL = "➤";
+const ACTIVE_COURSE_ARROW_INTERVAL_M = 95;
+const PREVIEW_COURSE_ARROW_INTERVAL_M = 85;
+
 const DEFAULT_CENTER: LngLat = [126.9205, 37.5297];
 
 const DEFAULT_COURSE: Course = {
@@ -156,13 +160,16 @@ function makeCourseArrowGeoJson(
     const point = getLngLatAtDistance(polyline, distanceM);
     const nextPoint = getLngLatAtDistance(
       polyline,
-      Math.min(distanceM + 8, totalDistanceM)
+      Math.min(distanceM + 12, totalDistanceM)
     );
+
+    const bearing = getBearingDegrees(point, nextPoint);
 
     features.push({
       type: "Feature",
       properties: {
-        bearing: getBearingDegrees(point, nextPoint),
+        bearing,
+        rotation: (bearing - 90 + 360) % 360,
       },
       geometry: {
         type: "Point",
@@ -239,6 +246,87 @@ function createRunnerMarkerElement(
   wrapper.appendChild(text);
 
   return wrapper;
+}
+
+function createCurrentLocationMarkerElement() {
+  const wrapper = document.createElement("div");
+  wrapper.style.position = "relative";
+  wrapper.style.width = "34px";
+  wrapper.style.height = "34px";
+  wrapper.style.display = "flex";
+  wrapper.style.alignItems = "center";
+  wrapper.style.justifyContent = "center";
+
+  const pulse = document.createElement("div");
+  pulse.style.position = "absolute";
+  pulse.style.width = "34px";
+  pulse.style.height = "34px";
+  pulse.style.borderRadius = "9999px";
+  pulse.style.background = "rgba(37, 99, 235, 0.22)";
+  pulse.style.boxShadow = "0 0 0 8px rgba(37, 99, 235, 0.10)";
+
+  const dot = document.createElement("div");
+  dot.style.position = "relative";
+  dot.style.width = "16px";
+  dot.style.height = "16px";
+  dot.style.borderRadius = "9999px";
+  dot.style.background = "#2563eb";
+  dot.style.border = "3px solid white";
+  dot.style.boxShadow = "0 4px 12px rgba(15, 23, 42, 0.35)";
+
+  wrapper.appendChild(pulse);
+  wrapper.appendChild(dot);
+
+  return wrapper;
+}
+
+function createRoutePointMarkerElement(label: string, color: string) {
+  const wrapper = document.createElement("div");
+  wrapper.style.display = "flex";
+  wrapper.style.flexDirection = "column";
+  wrapper.style.alignItems = "center";
+  wrapper.style.gap = "2px";
+
+  const dot = document.createElement("div");
+  dot.className = "route-point-dot";
+  dot.textContent = "↩";
+  dot.style.width = "34px";
+  dot.style.height = "34px";
+  dot.style.borderRadius = "9999px";
+  dot.style.background = color;
+  dot.style.color = "white";
+  dot.style.display = "flex";
+  dot.style.alignItems = "center";
+  dot.style.justifyContent = "center";
+  dot.style.fontSize = "17px";
+  dot.style.fontWeight = "900";
+  dot.style.border = "2px solid white";
+  dot.style.boxShadow = "0 4px 12px rgba(15, 23, 42, 0.28)";
+
+  const text = document.createElement("div");
+  text.textContent = label;
+  text.style.background = "rgba(15, 23, 42, 0.92)";
+  text.style.color = "white";
+  text.style.padding = "2px 6px";
+  text.style.borderRadius = "9999px";
+  text.style.fontSize = "11px";
+  text.style.fontWeight = "800";
+  text.style.whiteSpace = "nowrap";
+
+  wrapper.appendChild(dot);
+  wrapper.appendChild(text);
+
+  return wrapper;
+}
+
+function getRouteMidpoint(polyline: LngLat[]): LngLat | null {
+  const distanceM = getPolylineLengthM(polyline);
+
+  if (polyline.length < 2 || distanceM <= 1) {
+    return null;
+  }
+
+  return getLngLatAtDistance(polyline, distanceM / 2);
 }
 
 function getGpsStatusLabel(status: string): string {
@@ -518,6 +606,9 @@ export default function RaceMap() {
   const startMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const finishMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const playerMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const currentLocationMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const activeCourseMidpointMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const previewCourseMidpointMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const botMarkerRefs = useRef<Record<string, mapboxgl.Marker>>({});
   const customPointMarkerRefs = useRef<
     Partial<Record<CustomPointStep, mapboxgl.Marker>>
@@ -711,7 +802,7 @@ export default function RaceMap() {
     if (!map) return;
 
     const data = isRunnableCourse(course)
-      ? makeCourseArrowGeoJson(course.polyline, 95)
+      ? makeCourseArrowGeoJson(course.polyline, ACTIVE_COURSE_ARROW_INTERVAL_M)
       : makeEmptyPointFeatureCollection();
 
     const source = map.getSource("race-course-arrows") as
@@ -734,9 +825,9 @@ export default function RaceMap() {
         source: "race-course-arrows",
         layout: {
           "symbol-placement": "point",
-          "text-field": "▲",
-          "text-size": 15,
-          "text-rotate": ["get", "bearing"] as never,
+          "text-field": COURSE_ARROW_SYMBOL,
+          "text-size": 17,
+          "text-rotate": ["get", "rotation"] as never,
           "text-rotation-alignment": "map",
           "text-pitch-alignment": "map",
           "text-allow-overlap": true,
@@ -795,7 +886,7 @@ export default function RaceMap() {
     if (!map) return;
 
     const data = candidate
-      ? makeCourseArrowGeoJson(candidate.polyline, 85)
+      ? makeCourseArrowGeoJson(candidate.polyline, PREVIEW_COURSE_ARROW_INTERVAL_M)
       : makeEmptyPointFeatureCollection();
 
     const source = map.getSource("auto-loop-candidate-arrows") as
@@ -818,9 +909,9 @@ export default function RaceMap() {
         source: "auto-loop-candidate-arrows",
         layout: {
           "symbol-placement": "point",
-          "text-field": "▲",
-          "text-size": 16,
-          "text-rotate": ["get", "bearing"] as never,
+          "text-field": COURSE_ARROW_SYMBOL,
+          "text-size": 18,
+          "text-rotate": ["get", "rotation"] as never,
           "text-rotation-alignment": "map",
           "text-pitch-alignment": "map",
           "text-allow-overlap": true,
@@ -834,6 +925,88 @@ export default function RaceMap() {
       });
     } else {
       map.setPaintProperty("auto-loop-candidate-arrows-symbol", "text-color", color);
+    }
+  }
+
+  function updatePreviewCourseMidpointMarker(
+    candidate: AutoLoopCourseCandidate | null,
+    color: string
+  ) {
+    const map = mapRef.current;
+
+    if (!map || !candidate) {
+      previewCourseMidpointMarkerRef.current?.getElement().style.setProperty(
+        "display",
+        "none"
+      );
+      return;
+    }
+
+    const midpoint = getRouteMidpoint(candidate.polyline);
+
+    if (!midpoint) {
+      previewCourseMidpointMarkerRef.current?.getElement().style.setProperty(
+        "display",
+        "none"
+      );
+      return;
+    }
+
+    if (!previewCourseMidpointMarkerRef.current) {
+      previewCourseMidpointMarkerRef.current = new mapboxgl.Marker({
+        element: createRoutePointMarkerElement("반환점", color),
+        anchor: "bottom",
+      })
+        .setLngLat(midpoint)
+        .setPopup(new mapboxgl.Popup().setText("반환점 / 후보 코스 중간지점"))
+        .addTo(map);
+    } else {
+      previewCourseMidpointMarkerRef.current.setLngLat(midpoint);
+      previewCourseMidpointMarkerRef.current
+        .getElement()
+        .style.setProperty("display", "flex");
+
+      const dot =
+        previewCourseMidpointMarkerRef.current.getElement().querySelector(
+          ".route-point-dot"
+        ) as HTMLDivElement | null;
+
+      if (dot) {
+        dot.style.background = color;
+      }
+    }
+  }
+
+  function updateActiveCourseMidpointMarker(course: Course) {
+    const map = mapRef.current;
+
+    if (!map) return;
+
+    const midpoint = isRunnableCourse(course)
+      ? getRouteMidpoint(course.polyline)
+      : null;
+
+    if (!midpoint) {
+      activeCourseMidpointMarkerRef.current?.getElement().style.setProperty(
+        "display",
+        "none"
+      );
+      return;
+    }
+
+    if (!activeCourseMidpointMarkerRef.current) {
+      activeCourseMidpointMarkerRef.current = new mapboxgl.Marker({
+        element: createRoutePointMarkerElement("반환점", "#f97316"),
+        anchor: "bottom",
+      })
+        .setLngLat(midpoint)
+        .setPopup(new mapboxgl.Popup().setText("반환점 / 코스 중간지점"))
+        .addTo(map);
+    } else {
+      activeCourseMidpointMarkerRef.current.setLngLat(midpoint);
+      activeCourseMidpointMarkerRef.current
+        .getElement()
+        .style.setProperty("display", "flex");
     }
   }
 
@@ -880,6 +1053,7 @@ export default function RaceMap() {
     }
 
     updateAutoLoopCandidateArrowOverlay(candidate, color);
+    updatePreviewCourseMidpointMarker(candidate, color);
   }
 
   function clearAutoLoopCandidateOverlay() {
@@ -901,6 +1075,11 @@ export default function RaceMap() {
     if (arrowSource) {
       arrowSource.setData(makeEmptyPointFeatureCollection());
     }
+
+    previewCourseMidpointMarkerRef.current?.getElement().style.setProperty(
+      "display",
+      "none"
+    );
   }
 
   function clearAutoLoopCandidates() {
@@ -1505,6 +1684,16 @@ export default function RaceMap() {
 
       playerMarkerRef.current.getElement().style.display = "none";
 
+      currentLocationMarkerRef.current = new mapboxgl.Marker({
+        element: createCurrentLocationMarkerElement(),
+        anchor: "center",
+      })
+        .setLngLat(DEFAULT_CENTER)
+        .setPopup(new mapboxgl.Popup().setText("현재 위치"))
+        .addTo(map);
+
+      currentLocationMarkerRef.current.getElement().style.display = "none";
+
       DEFAULT_BOTS.forEach((bot) => {
         const marker = new mapboxgl.Marker({
           element: createRunnerMarkerElement(bot.name, "🤖", "#2563eb"),
@@ -1550,6 +1739,15 @@ export default function RaceMap() {
       playerMarkerRef.current?.remove();
       playerMarkerRef.current = null;
 
+      currentLocationMarkerRef.current?.remove();
+      currentLocationMarkerRef.current = null;
+
+      activeCourseMidpointMarkerRef.current?.remove();
+      activeCourseMidpointMarkerRef.current = null;
+
+      previewCourseMidpointMarkerRef.current?.remove();
+      previewCourseMidpointMarkerRef.current = null;
+
       Object.values(botMarkerRefs.current).forEach((marker) => marker.remove());
       botMarkerRefs.current = {};
 
@@ -1569,6 +1767,7 @@ export default function RaceMap() {
     }
 
     resetMarkersToCourseStart(activeCourse);
+    updateActiveCourseMidpointMarker(activeCourse);
 
     setRunnerHud(createInitialHud());
     setElapsedSec(0);
@@ -1964,7 +2163,14 @@ export default function RaceMap() {
         position.coords.latitude,
       ];
 
+      currentLocationMarkerRef.current?.setLngLat(origin);
+      currentLocationMarkerRef.current?.getElement().style.setProperty(
+        "display",
+        "flex"
+      );
+
       playerMarkerRef.current?.setLngLat(origin);
+
       mapRef.current?.flyTo({
         center: origin,
         zoom: 15.5,
