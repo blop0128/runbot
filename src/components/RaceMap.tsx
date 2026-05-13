@@ -7917,6 +7917,47 @@ export default function RaceMap() {
           }
         }
 
+
+        /* =========================================================
+           Mobile collapsed candidate sheet must stay at the bottom.
+           This intentionally overrides the expanded candidate sheet top lane.
+           ========================================================= */
+        @media (max-width: 767px) {
+          .race-root-map.race-root-auto-loop-open.race-root-auto-loop-collapsed .race-auto-loop-panel {
+            top: auto !important;
+            bottom: calc(max(10px, env(safe-area-inset-bottom)) + 8px) !important;
+            left: 10px !important;
+            right: 10px !important;
+            height: auto !important;
+            min-height: 0 !important;
+            max-height: 116px !important;
+            overflow: hidden !important;
+            transform: none !important;
+            border-radius: 22px !important;
+            z-index: 72 !important;
+          }
+
+          .race-root-map.race-root-auto-loop-open.race-root-auto-loop-collapsed .race-auto-loop-panel > .mb-2 {
+            position: relative !important;
+            top: auto !important;
+            z-index: 2 !important;
+            margin: 0 !important;
+            border-radius: 18px !important;
+            padding: 8px !important;
+          }
+
+          .race-root-map.race-root-auto-loop-open.race-root-auto-loop-collapsed .race-auto-loop-panel > .mb-2 > div:first-child {
+            min-width: 0;
+          }
+
+          .race-root-map.race-root-auto-loop-open.race-root-auto-loop-collapsed .race-auto-loop-panel > .mb-2 .text-xs {
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+          }
+        }
+
       `}</style>
 
     </div>
