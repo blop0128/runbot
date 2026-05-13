@@ -4895,22 +4895,27 @@ export default function RaceMap() {
           position: absolute;
           inset: 0;
           z-index: 20;
-          overflow: hidden;
           background:
             linear-gradient(
               135deg,
-              rgba(248, 250, 252, 0.94) 0%,
-              rgba(239, 246, 255, 0.82) 44%,
-              rgba(236, 253, 245, 0.78) 100%
+              rgba(248, 250, 252, 0.88),
+              rgba(239, 246, 255, 0.78),
+              rgba(236, 253, 245, 0.78)
             ),
             radial-gradient(
-              circle at 18% 8%,
-              rgba(255, 255, 255, 0.86),
+              circle at top left,
+              rgba(59, 130, 246, 0.16),
               transparent 34%
             ),
-            url("https://images.pexels.com/photos/32711610/pexels-photo-32711610.jpeg?auto=compress&cs=tinysrgb&w=1920");
+            radial-gradient(
+              circle at bottom right,
+              rgba(34, 197, 94, 0.14),
+              transparent 30%
+            ),
+            url("/backgrounds/runner-bg.jpg");
           background-size: cover;
-          background-position: center;
+          background-position: center center;
+          background-repeat: no-repeat;
         }
 
         .setup-background::after {
