@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
 import {
   generateAutoLoopCourseCandidates,
+  generateCustomWalkingCourse,
   type AutoLoopCourseCandidate,
   type Course,
   type LngLat,
@@ -18,7 +19,7 @@ import {
 
 type PlayerMode = "pace" | "gps";
 type ActivePanel = "setup" | "map";
-type SetupView = "main" | "myCourses";
+type SetupView = "main" | "myCourses" | "customCourses";
 type CandidateMode = "outAndBack" | "oneWay";
 type CustomPointStep = "start" | "turnaround" | "finish";
 type CustomGuide =
@@ -54,6 +55,14 @@ type SavedCourseRecord = Course & {
   completedAt: number;
   elapsedSec: number | null;
   courseMode: CandidateMode | "custom" | "saved" | null;
+  turnaround: LngLat | null;
+};
+
+type CustomCourseRecord = Course & {
+  customId: string;
+  createdAt: number;
+  updatedAt: number;
+  courseMode: "custom";
   turnaround: LngLat | null;
 };
 
@@ -98,6 +107,7 @@ type DirectionsResponse = {
 
 const INITIAL_SELECTED_BOT_IDS = ["bot_600", "bot_500", "bot_400"];
 const SAVED_COURSES_STORAGE_KEY = "runbot:savedCourses:v1";
+const CUSTOM_COURSES_STORAGE_KEY = "runbot:customCourses:v1";
 const AUTO_LOOP_PAGE_SIZE = 5;
 const AUTO_LOOP_COLORS = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#3b82f6"];
 const DEFAULT_DISTANCE_TOLERANCE_M = 500;
@@ -681,8 +691,13 @@ function createCustomPointMarkerElement(type: CustomPointStep) {
 
 function getSortedSavedCourses(courses: SavedCourseRecord[]): SavedCourseRecord[] {
   return [...courses].sort((a, b) => {
+    if (a.favorite !== b.favorite) return a.favorite ? -1 : 1;
     return b.completedAt - a.completedAt;
   });
+}
+
+function getSortedCustomCourses(courses: CustomCourseRecord[]): CustomCourseRecord[] {
+  return [...courses].sort((a, b) => b.createdAt - a.createdAt);
 }
 
 function validateSavedCourseRecord(value: unknown): SavedCourseRecord | null {
@@ -754,6 +769,59 @@ function validateSavedCourseRecord(value: unknown): SavedCourseRecord | null {
         ? record.elapsedSec
         : null,
     courseMode: validCourseMode ?? "saved",
+    turnaround: validTurnaround,
+  };
+}
+
+function validateCustomCourseRecord(value: unknown): CustomCourseRecord | null {
+  if (typeof value !== "object" || value === null) return null;
+
+  const record = value as Partial<CustomCourseRecord>;
+
+  if (
+    typeof record.customId !== "string" ||
+    typeof record.id !== "string" ||
+    typeof record.name !== "string" ||
+    typeof record.distanceM !== "number" ||
+    !Array.isArray(record.polyline)
+  ) {
+    return null;
+  }
+
+  const validPolyline = record.polyline.every((point) => {
+    return (
+      Array.isArray(point) &&
+      point.length === 2 &&
+      typeof point[0] === "number" &&
+      typeof point[1] === "number" &&
+      Number.isFinite(point[0]) &&
+      Number.isFinite(point[1])
+    );
+  });
+
+  if (!validPolyline) return null;
+
+  const validTurnaround =
+    Array.isArray(record.turnaround) &&
+    record.turnaround.length === 2 &&
+    typeof record.turnaround[0] === "number" &&
+    typeof record.turnaround[1] === "number" &&
+    Number.isFinite(record.turnaround[0]) &&
+    Number.isFinite(record.turnaround[1])
+      ? ([record.turnaround[0], record.turnaround[1]] as LngLat)
+      : null;
+
+  return {
+    customId: record.customId,
+    id: record.id,
+    name: record.name,
+    distanceM: record.distanceM,
+    polyline: record.polyline as LngLat[],
+    createdAt:
+      typeof record.createdAt === "number" ? record.createdAt : Date.now(),
+    updatedAt:
+      typeof record.updatedAt === "number" ? record.updatedAt : Date.now(),
+    courseMode: "custom",
     turnaround: validTurnaround,
   };
 }
@@ -907,6 +975,8 @@ export default function RaceMap() {
 
   const [savedCourses, setSavedCourses] = useState<SavedCourseRecord[]>([]);
   const [hasLoadedSavedCourses, setHasLoadedSavedCourses] = useState(false);
+  const [customCourses, setCustomCourses] = useState<CustomCourseRecord[]>([]);
+  const [hasLoadedCustomCourses, setHasLoadedCustomCourses] = useState(false);
 
   const [status, setStatus] = useState("지도 초기화 중...");
   const [error, setError] = useState<string | null>(null);
@@ -989,6 +1059,10 @@ export default function RaceMap() {
   const sortedSavedCourses = useMemo(() => {
     return getSortedSavedCourses(savedCourses);
   }, [savedCourses]);
+
+  const sortedCustomCourses = useMemo(() => {
+    return getSortedCustomCourses(customCourses);
+  }, [customCourses]);
 
   const savedCourseGroups = useMemo(() => {
     return groupSavedCoursesByDate(sortedSavedCourses);
@@ -1703,6 +1777,79 @@ export default function RaceMap() {
     saveCourseRecord(record);
   }
 
+  function makeCustomCourseRecord({
+    course,
+    name,
+    turnaround,
+  }: {
+    course: Course;
+    name: string;
+    turnaround: LngLat | null;
+  }): CustomCourseRecord {
+    const now = Date.now();
+
+    return {
+      ...course,
+      id: `custom-course-base-${now}`,
+      customId: `custom-course-${now}`,
+      name,
+      createdAt: now,
+      updatedAt: now,
+      courseMode: "custom",
+      turnaround,
+    };
+  }
+
+  function updateCustomCourseName(customId: string, name: string) {
+    setCustomCourses((current) =>
+      current.map((course) =>
+        course.customId === customId
+          ? {
+              ...course,
+              name,
+              updatedAt: Date.now(),
+            }
+          : course
+      )
+    );
+  }
+
+  function applyCustomCourse(course: CustomCourseRecord) {
+    const nextCourse: Course = {
+      id: course.id,
+      name: course.name,
+      distanceM: course.distanceM,
+      polyline: course.polyline,
+    };
+
+    gpsTracker.stop();
+    latestGpsProjectionRef.current = null;
+    clearCustomPointMarkers();
+    clearAutoLoopCandidates();
+
+    setIsCustomCourseMode(false);
+    setCustomGuide(null);
+    setCustomPoints(INITIAL_CUSTOM_POINTS);
+    setActiveCourseTurnaround(course.turnaround);
+    setActiveCourseMode("custom");
+    setActiveCourse(nextCourse);
+    setActivePanel("map");
+    setSetupView("main");
+    setStatus(`${course.name} 커스텀 코스를 지도에 표시했습니다.`);
+  }
+
+  function deleteCustomCourse(customId: string) {
+    const target = customCourses.find((course) => course.customId === customId);
+
+    if (target && !window.confirm(`"${target.name}" 커스텀 코스를 삭제할까요?`)) {
+      return;
+    }
+
+    setCustomCourses((current) =>
+      current.filter((course) => course.customId !== customId)
+    );
+  }
+
   function updateSavedCourseName(savedId: string, name: string) {
     setSavedCourses((current) =>
       current.map((course) =>
@@ -1965,6 +2112,44 @@ export default function RaceMap() {
       JSON.stringify(savedCourses)
     );
   }, [savedCourses, hasLoadedSavedCourses]);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(CUSTOM_COURSES_STORAGE_KEY);
+
+      if (!raw) {
+        setCustomCourses([]);
+        return;
+      }
+
+      const parsed = JSON.parse(raw);
+
+      if (!Array.isArray(parsed)) {
+        setCustomCourses([]);
+        return;
+      }
+
+      setCustomCourses(
+        parsed
+          .map(validateCustomCourseRecord)
+          .filter((course): course is CustomCourseRecord => Boolean(course))
+      );
+    } catch (loadError) {
+      console.warn("Failed to load custom courses:", loadError);
+      setCustomCourses([]);
+    } finally {
+      setHasLoadedCustomCourses(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!hasLoadedCustomCourses) return;
+
+    window.localStorage.setItem(
+      CUSTOM_COURSES_STORAGE_KEY,
+      JSON.stringify(customCourses)
+    );
+  }, [customCourses, hasLoadedCustomCourses]);
 
   useEffect(() => {
     latestGpsProjectionRef.current = gpsTracker.latestProjection;
@@ -2410,9 +2595,84 @@ export default function RaceMap() {
   }
 
   async function handleBuildCustomCourse() {
-    // 수동 코스 생성 UI는 현재 제품 흐름에서 제거됨.
-    // 기존 localStorage 기록 호환성을 위해 함수 골격만 보존한다.
-    return;
+    if (isRunning) return;
+
+    const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+
+    if (!token) {
+      setCustomCourseError("Mapbox token이 없습니다.");
+      return;
+    }
+
+    if (!customPoints.start) {
+      setCustomCourseError("시작지점은 필수입니다.");
+      return;
+    }
+
+    if (!customPoints.finish) {
+      setCustomCourseError("종료지점은 필수입니다.");
+      return;
+    }
+
+    const trimmedName = customCourseName.trim();
+    const finalName =
+      trimmedName ||
+      `커스텀 코스 ${sortedCustomCourses.length + 1} · ${
+        customPoints.turnaround ? "경유" : "편도"
+      }`;
+
+    try {
+      setIsGeneratingCustomCourse(true);
+      setCustomCourseError(null);
+      setStatus("선택한 지점 기준으로 커스텀 코스를 생성하는 중...");
+
+      const nextCourse = await generateCustomWalkingCourse({
+        start: customPoints.start,
+        turnaround: customPoints.turnaround,
+        finish: customPoints.finish,
+        token,
+        name: finalName,
+      });
+
+      const customRecord = makeCustomCourseRecord({
+        course: nextCourse,
+        name: finalName,
+        turnaround: customPoints.turnaround,
+      });
+
+      setCustomCourses((current) => [customRecord, ...current]);
+
+      gpsTracker.stop();
+      latestGpsProjectionRef.current = null;
+      clearCustomPointMarkers();
+      clearAutoLoopCandidates();
+
+      setIsCustomCourseMode(false);
+      setCustomGuide(null);
+      setCustomPointStep("start");
+      setCustomPoints(INITIAL_CUSTOM_POINTS);
+      setCustomCourseName("");
+      setActiveCourseMode("custom");
+      setActiveCourseTurnaround(customPoints.turnaround);
+      setActiveCourse(nextCourse);
+      setActivePanel("map");
+      setSetupView("main");
+      setStatus(
+        `커스텀 코스 생성 및 저장 완료 · ${(nextCourse.distanceM / 1000).toFixed(
+          2
+        )}km`
+      );
+    } catch (rawError) {
+      const message =
+        rawError instanceof Error
+          ? rawError.message
+          : "커스텀 코스를 생성하지 못했습니다.";
+
+      setCustomCourseError(message);
+      setStatus("커스텀 코스 생성 실패");
+    } finally {
+      setIsGeneratingCustomCourse(false);
+    }
   }
 
   async function handleGenerateOutAndBackCandidates() {
@@ -2805,13 +3065,23 @@ export default function RaceMap() {
                     코스
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => setSetupView("myCourses")}
-                    className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700"
-                  >
-                    나의 코스
-                  </button>
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setSetupView("myCourses")}
+                      className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700"
+                    >
+                      나의 코스
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setSetupView("customCourses")}
+                      className="rounded-lg bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700"
+                    >
+                      커스텀 코스
+                    </button>
+                  </div>
                 </div>
 
                 <div className="rounded-lg bg-slate-50 p-2 text-xs text-slate-700">
@@ -2880,6 +3150,16 @@ export default function RaceMap() {
                   </div>
                 </div>
 
+                <div className="mt-3 grid grid-cols-1 gap-2">
+                  <button
+                    type="button"
+                    onClick={handleStartCustomCourseMode}
+                    disabled={isRunning}
+                    className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    커스텀 코스 생성
+                  </button>
+                </div>
 
                 {gpsActionError && (
                   <div className="mt-2 rounded-lg bg-red-50 p-2 text-xs text-red-700">
@@ -3161,16 +3441,33 @@ export default function RaceMap() {
                             )}
                           </div>
 
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              deleteSavedCourse(course.savedId);
-                            }}
-                            className="shrink-0 rounded-lg bg-red-50 px-2 py-2 text-xs font-semibold text-red-700"
-                          >
-                            삭제
-                          </button>
+                          <div className="flex shrink-0 flex-col gap-1">
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                toggleSavedCourseFavorite(course.savedId);
+                              }}
+                              className={`rounded-lg px-2 py-2 text-xs font-semibold ${
+                                course.favorite
+                                  ? "bg-yellow-100 text-yellow-800"
+                                  : "bg-slate-100 text-slate-700"
+                              }`}
+                            >
+                              {course.favorite ? "★ 즐겨찾기" : "☆ 즐겨찾기"}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                deleteSavedCourse(course.savedId);
+                              }}
+                              className="rounded-lg bg-red-50 px-2 py-2 text-xs font-semibold text-red-700"
+                            >
+                              삭제
+                            </button>
+                          </div>
                         </div>
 
                         <div className="mt-2 text-[11px] font-semibold text-blue-700">
@@ -3178,6 +3475,112 @@ export default function RaceMap() {
                         </div>
                       </div>
                     ))}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {activePanel === "setup" && setupView === "customCourses" && (
+        <div className="race-panel race-setup-panel">
+          <div className="mx-auto max-w-[560px] space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-2xl font-bold text-slate-900">
+                  커스텀 코스
+                </div>
+                <div className="text-xs text-slate-500">
+                  직접 만든 코스가 저장됩니다. 완주 기록은 나의 코스에 따로 쌓입니다.
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setSetupView("main")}
+                className="rounded-lg bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow"
+              >
+                뒤로
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleStartCustomCourseMode}
+              disabled={isRunning}
+              className="w-full rounded-xl bg-blue-600 px-3 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              새 커스텀 코스 만들기
+            </button>
+
+            {sortedCustomCourses.length === 0 ? (
+              <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-600">
+                저장된 커스텀 코스가 없습니다. 새 커스텀 코스를 만들어 저장하세요.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {sortedCustomCourses.map((course) => (
+                  <div
+                    key={course.customId}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => applyCustomCourse(course)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        applyCustomCourse(course);
+                      }
+                    }}
+                    className="cursor-pointer rounded-xl border border-slate-200 bg-white p-3 transition hover:border-blue-300 hover:bg-blue-50"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <label
+                          className="block space-y-1"
+                          onClick={(event) => event.stopPropagation()}
+                          onKeyDown={(event) => event.stopPropagation()}
+                        >
+                          <div className="text-[11px] font-semibold text-slate-500">
+                            코스 이름
+                          </div>
+                          <input
+                            value={course.name}
+                            onChange={(event) =>
+                              updateCustomCourseName(course.customId, event.target.value)
+                            }
+                            className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm font-semibold text-slate-900 outline-none focus:border-blue-500"
+                          />
+                        </label>
+
+                        <div className="mt-2 text-xs text-slate-500">
+                          생성일 {formatCompletedDate(course.createdAt)}{" "}
+                          {formatCompletedTime(course.createdAt)} ·{" "}
+                          {(course.distanceM / 1000).toFixed(2)} km
+                        </div>
+
+                        {course.turnaround && (
+                          <div className="mt-1 text-[11px] text-orange-700">
+                            반환점: {formatPoint(course.turnaround)}
+                          </div>
+                        )}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          deleteCustomCourse(course.customId);
+                        }}
+                        className="shrink-0 rounded-lg bg-red-50 px-2 py-2 text-xs font-semibold text-red-700"
+                      >
+                        삭제
+                      </button>
+                    </div>
+
+                    <div className="mt-2 text-[11px] font-semibold text-blue-700">
+                      코스를 누르면 지도에서 볼 수 있습니다.
+                    </div>
                   </div>
                 ))}
               </div>
@@ -3356,8 +3759,126 @@ export default function RaceMap() {
         </div>
       )}
 
-      {activePanel === "map" && !isAutoLoopPanelVisible && (
-        <div
+      {activePanel === "map" && isCustomCourseMode && (
+        <div className="race-panel race-custom-panel">
+          <div className="mb-2 flex items-start justify-between gap-3">
+            <div>
+              <div className="text-sm font-bold text-slate-900">
+                커스텀 코스 생성
+              </div>
+              <div className="text-xs text-slate-500">
+                다음 선택: {getCustomStepLabel(customPointStep)}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleCancelCustomCourseMode}
+              className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700"
+            >
+              취소
+            </button>
+          </div>
+
+          <div className="space-y-2 rounded-lg bg-slate-50 p-2 text-xs text-slate-700">
+            {(["start", "turnaround", "finish"] as CustomPointStep[]).map(
+              (pointType) => {
+                const point = customPoints[pointType];
+
+                return (
+                  <div
+                    key={pointType}
+                    className="flex items-center justify-between gap-2"
+                  >
+                    <div>
+                      <span className="font-semibold">
+                        {getCustomPointLabel(pointType)}:
+                      </span>{" "}
+                      {formatPoint(point)}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => removeCustomPoint(pointType)}
+                      disabled={!point}
+                      className="rounded-md bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      취소
+                    </button>
+                  </div>
+                );
+              }
+            )}
+          </div>
+
+          <div className="mt-3 rounded-lg bg-slate-50 p-2">
+            <label className="block space-y-1">
+              <div className="text-xs font-medium text-slate-600">
+                커스텀 코스 이름
+              </div>
+              <input
+                value={customCourseName}
+                onChange={(event) => setCustomCourseName(event.target.value)}
+                placeholder="예: 학교 앞 3K 왕복"
+                className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 outline-none focus:border-blue-500"
+              />
+            </label>
+          </div>
+
+          {customCourseError && (
+            <div className="mt-2 rounded-lg bg-red-50 p-2 text-xs text-red-700">
+              {customCourseError}
+            </div>
+          )}
+
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={handleAddTurnaroundPoint}
+              disabled={!customPoints.start || Boolean(customPoints.finish)}
+              className="rounded-lg bg-orange-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              반환점 추가
+            </button>
+
+            <button
+              type="button"
+              onClick={handleUseStartAsFinish}
+              disabled={!customPoints.start || !customPoints.turnaround}
+              className="rounded-lg bg-slate-700 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              종료=시작
+            </button>
+          </div>
+
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={resetCustomCourseDraft}
+              className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700"
+            >
+              전체 초기화
+            </button>
+
+            <button
+              type="button"
+              onClick={handleBuildCustomCourse}
+              disabled={!canBuildCustomCourse}
+              className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              {isGeneratingCustomCourse ? "생성 중..." : "커스텀 코스 저장"}
+            </button>
+          </div>
+
+          <div className="mt-2 text-[11px] text-slate-500">
+            지도에서 시작점과 종료지점을 선택하세요. 반환점을 추가하면 왕복 또는 경유
+            코스로 만들 수 있습니다. 저장된 코스는 커스텀 코스 탭에서 다시 불러올 수
+            있습니다.
+          </div>
+        </div>
+      )}
+
+      {activePanel === "map" && !isAutoLoopPanelVisible && !isCustomCourseMode && (        <div
           className={`race-panel race-map-hud ${
             isLeaderboardOpen ? "race-map-hud-open" : "race-map-hud-collapsed"
           }`}
