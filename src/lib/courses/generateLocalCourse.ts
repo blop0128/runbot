@@ -9,11 +9,47 @@ export type Course = {
 
 export type AutoLoopCourseCandidate = Course & {
   candidateId: string;
-  targetDistanceM: number;
   distanceErrorM: number;
   isWithinTolerance: boolean;
-  waypoints: LngLat[];
+  bearingDeg: number;
+  endpoint: LngLat;
+  straightDistanceM: number;
+  outboundDistanceM: number;
 };
+
+type DirectionsRoute = {
+  distance: number;
+  geometry: {
+    coordinates: LngLat[];
+  };
+};
+
+type DirectionsResponse = {
+  code?: string;
+  routes?: DirectionsRoute[];
+  message?: string;
+};
+
+type GenerateAutoLoopCourseCandidatesArgs = {
+  origin: LngLat;
+  token: string;
+  targetDistanceM: number;
+  toleranceM?: number;
+};
+
+type GenerateCustomWalkingCourseArgs = {
+  start: LngLat;
+  turnaround?: LngLat | null;
+  finish: LngLat;
+  token: string;
+  name?: string;
+};
+
+const EARTH_RADIUS_M = 6_371_000;
+const OUT_AND_BACK_ENDPOINT_TOLERANCE_M = 200;
+const DEFAULT_DISTANCE_TOLERANCE_M = 500;
+const MAX_CANDIDATES_TO_RETURN = 30;
+const DIRECTIONS_PROFILE = "mapbox/walking";
 
 function toRadians(degrees: number): number {
   return (degrees * Math.PI) / 180;
@@ -23,408 +59,359 @@ function toDegrees(radians: number): number {
   return (radians * 180) / Math.PI;
 }
 
-function destinationPoint(
-  start: LngLat,
-  distanceM: number,
-  bearingDegrees: number
-): LngLat {
-  const [lng, lat] = start;
-  const radiusM = 6_371_000;
+function normalizeLng(lng: number): number {
+  return ((((lng + 180) % 360) + 360) % 360) - 180;
+}
 
-  const angularDistance = distanceM / radiusM;
-  const bearing = toRadians(bearingDegrees);
+function roundCoord(value: number): number {
+  return Number(value.toFixed(6));
+}
 
-  const lat1 = toRadians(lat);
-  const lng1 = toRadians(lng);
-
-  const lat2 = Math.asin(
-    Math.sin(lat1) * Math.cos(angularDistance) +
-      Math.cos(lat1) * Math.sin(angularDistance) * Math.cos(bearing)
-  );
-
-  const lng2 =
-    lng1 +
-    Math.atan2(
-      Math.sin(bearing) * Math.sin(angularDistance) * Math.cos(lat1),
-      Math.cos(angularDistance) - Math.sin(lat1) * Math.sin(lat2)
-    );
-
-  return [toDegrees(lng2), toDegrees(lat2)];
+function roundPoint(point: LngLat): LngLat {
+  return [roundCoord(point[0]), roundCoord(point[1])];
 }
 
 function haversineDistanceM(a: LngLat, b: LngLat): number {
   const [lng1, lat1] = a;
   const [lng2, lat2] = b;
 
-  const radiusM = 6_371_000;
+  const phi1 = toRadians(lat1);
+  const phi2 = toRadians(lat2);
+  const deltaPhi = toRadians(lat2 - lat1);
+  const deltaLambda = toRadians(lng2 - lng1);
 
-  const dLat = toRadians(lat2 - lat1);
-  const dLng = toRadians(lng2 - lng1);
-
-  const rLat1 = toRadians(lat1);
-  const rLat2 = toRadians(lat2);
+  const sinHalfPhi = Math.sin(deltaPhi / 2);
+  const sinHalfLambda = Math.sin(deltaLambda / 2);
 
   const h =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(rLat1) * Math.cos(rLat2) * Math.sin(dLng / 2) ** 2;
+    sinHalfPhi * sinHalfPhi +
+    Math.cos(phi1) * Math.cos(phi2) * sinHalfLambda * sinHalfLambda;
 
-  return 2 * radiusM * Math.asin(Math.sqrt(h));
+  return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(h));
 }
 
-function isSamePoint(a: LngLat, b: LngLat): boolean {
-  return haversineDistanceM(a, b) < 1;
+function destinationPoint(
+  origin: LngLat,
+  distanceM: number,
+  bearingDeg: number
+): LngLat {
+  const [lng, lat] = origin;
+
+  const angularDistance = distanceM / EARTH_RADIUS_M;
+  const bearing = toRadians(bearingDeg);
+
+  const phi1 = toRadians(lat);
+  const lambda1 = toRadians(lng);
+
+  const sinPhi1 = Math.sin(phi1);
+  const cosPhi1 = Math.cos(phi1);
+  const sinAngularDistance = Math.sin(angularDistance);
+  const cosAngularDistance = Math.cos(angularDistance);
+
+  const phi2 = Math.asin(
+    sinPhi1 * cosAngularDistance +
+      cosPhi1 * sinAngularDistance * Math.cos(bearing)
+  );
+
+  const lambda2 =
+    lambda1 +
+    Math.atan2(
+      Math.sin(bearing) * sinAngularDistance * cosPhi1,
+      cosAngularDistance - sinPhi1 * Math.sin(phi2)
+    );
+
+  return roundPoint([normalizeLng(toDegrees(lambda2)), toDegrees(phi2)]);
 }
 
-function createDenseStraightSegment(from: LngLat, to: LngLat): {
-  coordinates: LngLat[];
-  distanceM: number;
-} {
-  const pointCount = 24;
-  const coordinates: LngLat[] = [];
+function getPolylineLengthM(polyline: LngLat[]): number {
+  let total = 0;
 
-  for (let i = 0; i <= pointCount; i += 1) {
-    const ratio = i / pointCount;
-
-    coordinates.push([
-      from[0] + (to[0] - from[0]) * ratio,
-      from[1] + (to[1] - from[1]) * ratio,
-    ]);
+  for (let i = 1; i < polyline.length; i += 1) {
+    total += haversineDistanceM(polyline[i - 1], polyline[i]);
   }
 
-  return {
-    coordinates,
-    distanceM: haversineDistanceM(from, to),
-  };
+  return total;
 }
 
-function normalizeSegmentCoordinates(
-  coordinates: LngLat[],
-  from: LngLat,
-  to: LngLat
-): LngLat[] {
-  const normalized = [...coordinates];
+function removeConsecutiveDuplicatePoints(polyline: LngLat[]): LngLat[] {
+  const result: LngLat[] = [];
 
-  if (normalized.length === 0) {
-    return [from, to];
-  }
+  polyline.forEach((point) => {
+    const previous = result[result.length - 1];
 
-  if (!isSamePoint(normalized[0], from)) {
-    normalized.unshift(from);
-  } else {
-    normalized[0] = from;
-  }
-
-  if (!isSamePoint(normalized[normalized.length - 1], to)) {
-    normalized.push(to);
-  } else {
-    normalized[normalized.length - 1] = to;
-  }
-
-  return normalized;
-}
-
-async function fetchWalkingSegment(params: {
-  from: LngLat;
-  to: LngLat;
-  token: string;
-}): Promise<{ coordinates: LngLat[]; distanceM: number }> {
-  const { from, to, token } = params;
-
-  if (isSamePoint(from, to)) {
-    return {
-      coordinates: [from],
-      distanceM: 0,
-    };
-  }
-
-  const coordinateString = [from, to]
-    .map(([lng, lat]) => `${lng},${lat}`)
-    .join(";");
-
-  const url =
-    `https://api.mapbox.com/directions/v5/mapbox/walking/${coordinateString}` +
-    `?geometries=geojson&overview=full&steps=false&access_token=${token}`;
-
-  try {
-    const response = await fetch(url);
-
-    if (!response.ok) {
-      console.warn("Mapbox Directions failed:", await response.text());
-      return createDenseStraightSegment(from, to);
-    }
-
-    const data = await response.json();
-    const route = data.routes?.[0];
-
-    if (
-      !route?.geometry?.coordinates ||
-      !Array.isArray(route.geometry.coordinates)
-    ) {
-      console.warn("Mapbox Directions returned invalid geometry:", data);
-      return createDenseStraightSegment(from, to);
-    }
-
-    const rawCoordinates = route.geometry.coordinates as LngLat[];
-    const distanceM = Number(route.distance);
-
-    if (
-      rawCoordinates.length < 2 ||
-      !Number.isFinite(distanceM) ||
-      distanceM <= 0
-    ) {
-      return createDenseStraightSegment(from, to);
-    }
-
-    return {
-      coordinates: normalizeSegmentCoordinates(rawCoordinates, from, to),
-      distanceM,
-    };
-  } catch (error) {
-    console.warn("Failed to fetch walking segment:", error);
-    return createDenseStraightSegment(from, to);
-  }
-}
-
-async function fetchWalkingRouteThroughPoints(params: {
-  points: LngLat[];
-  token: string;
-}): Promise<{ coordinates: LngLat[]; distanceM: number } | null> {
-  const { points, token } = params;
-
-  if (points.length < 2) return null;
-
-  const coordinateString = points
-    .map(([lng, lat]) => `${lng},${lat}`)
-    .join(";");
-
-  const url =
-    `https://api.mapbox.com/directions/v5/mapbox/walking/${coordinateString}` +
-    `?geometries=geojson&overview=full&steps=false&access_token=${token}`;
-
-  try {
-    const response = await fetch(url);
-
-    if (!response.ok) {
-      console.warn("Mapbox multi-point route failed:", await response.text());
-      return null;
-    }
-
-    const data = await response.json();
-    const route = data.routes?.[0];
-
-    if (
-      !route?.geometry?.coordinates ||
-      !Array.isArray(route.geometry.coordinates)
-    ) {
-      console.warn("Mapbox multi-point route returned invalid geometry:", data);
-      return null;
-    }
-
-    const rawCoordinates = route.geometry.coordinates as LngLat[];
-    const distanceM = Number(route.distance);
-
-    if (
-      rawCoordinates.length < 2 ||
-      !Number.isFinite(distanceM) ||
-      distanceM <= 0
-    ) {
-      return null;
-    }
-
-    return {
-      coordinates: normalizeSegmentCoordinates(
-        rawCoordinates,
-        points[0],
-        points[points.length - 1]
-      ),
-      distanceM,
-    };
-  } catch (error) {
-    console.warn("Failed to fetch walking route through points:", error);
-    return null;
-  }
-}
-
-function combineSegments(segments: LngLat[][]): LngLat[] {
-  const combined: LngLat[] = [];
-
-  segments.forEach((segment, segmentIndex) => {
-    if (segment.length === 0) return;
-
-    if (segmentIndex === 0) {
-      combined.push(...segment);
+    if (!previous) {
+      result.push(point);
       return;
     }
 
-    combined.push(...segment.slice(1));
+    if (
+      Math.abs(previous[0] - point[0]) > 0.000001 ||
+      Math.abs(previous[1] - point[1]) > 0.000001
+    ) {
+      result.push(point);
+    }
   });
 
-  return combined;
+  return result;
 }
 
-function makeCandidateKey(points: LngLat[]): string {
-  return points
-    .map(([lng, lat]) => `${lng.toFixed(5)},${lat.toFixed(5)}`)
-    .join("|");
-}
+function joinPolylines(parts: LngLat[][]): LngLat[] {
+  const result: LngLat[] = [];
 
-export async function generateCustomWalkingCourse(params: {
-  start: LngLat;
-  finish: LngLat;
-  turnaround?: LngLat | null;
-  token: string;
-  name?: string;
-}): Promise<Course> {
-  const { start, finish, turnaround, token, name = "커스텀 코스" } = params;
+  parts.forEach((part) => {
+    part.forEach((point, index) => {
+      const previous = result[result.length - 1];
 
-  if (!turnaround && isSamePoint(start, finish)) {
-    throw new Error("시작지점과 종료지점이 같을 때는 반환점을 선택해야 합니다.");
-  }
+      if (
+        index === 0 &&
+        previous &&
+        Math.abs(previous[0] - point[0]) <= 0.000001 &&
+        Math.abs(previous[1] - point[1]) <= 0.000001
+      ) {
+        return;
+      }
 
-  const waypoints = turnaround ? [start, turnaround, finish] : [start, finish];
-
-  const segmentCoordinates: LngLat[][] = [];
-  let totalDistanceM = 0;
-
-  for (let i = 1; i < waypoints.length; i += 1) {
-    const from = waypoints[i - 1];
-    const to = waypoints[i];
-
-    const segment = await fetchWalkingSegment({
-      from,
-      to,
-      token,
+      result.push(point);
     });
+  });
 
-    segmentCoordinates.push(segment.coordinates);
-    totalDistanceM += segment.distanceM;
+  return removeConsecutiveDuplicatePoints(result);
+}
+
+function makeDirectionsUrl(points: LngLat[], token: string): string {
+  const coordinates = points
+    .map((point) => `${point[0]},${point[1]}`)
+    .join(";");
+
+  const params = new URLSearchParams({
+    access_token: token,
+    geometries: "geojson",
+    overview: "full",
+    steps: "false",
+    alternatives: "false",
+  });
+
+  return `https://api.mapbox.com/directions/v5/${DIRECTIONS_PROFILE}/${coordinates}?${params.toString()}`;
+}
+
+async function fetchWalkingRoute(points: LngLat[], token: string): Promise<{
+  distanceM: number;
+  polyline: LngLat[];
+}> {
+  const response = await fetch(makeDirectionsUrl(points, token));
+
+  if (!response.ok) {
+    throw new Error(`Mapbox Directions 요청 실패: HTTP ${response.status}`);
   }
 
-  const polyline = combineSegments(segmentCoordinates);
+  const data = (await response.json()) as DirectionsResponse;
 
-  if (polyline.length < 2 || totalDistanceM <= 0) {
-    throw new Error("코스를 생성하지 못했습니다. 다른 지점을 선택해 주세요.");
+  if (data.code !== "Ok" || !data.routes || data.routes.length === 0) {
+    throw new Error(data.message || "보행 경로를 찾지 못했습니다.");
   }
+
+  const route = data.routes[0];
 
   return {
-    id: `custom-course-${Date.now()}`,
-    name,
-    distanceM: Math.round(totalDistanceM),
-    polyline,
+    distanceM: route.distance,
+    polyline: removeConsecutiveDuplicatePoints(route.geometry.coordinates),
   };
 }
 
-export async function generateLocalOutAndBackCourse(params: {
-  origin: LngLat;
-  token: string;
-  targetDistanceM?: number;
-}): Promise<Course> {
-  const { origin, token, targetDistanceM = 1000 } = params;
+function makeOutAndBackPolyline(outboundPolyline: LngLat[]): LngLat[] {
+  const reversed = [...outboundPolyline].reverse();
 
-  const halfDistanceM = targetDistanceM / 2;
-  const candidateBearings = [90, 0, 180, 270];
-
-  for (const bearing of candidateBearings) {
-    const turnaround = destinationPoint(origin, halfDistanceM, bearing);
-
-    try {
-      return await generateCustomWalkingCourse({
-        start: origin,
-        turnaround,
-        finish: origin,
-        token,
-        name: "현재 위치 1K 테스트 코스",
-      });
-    } catch (error) {
-      console.warn("Failed local course candidate:", bearing, error);
-    }
-  }
-
-  const fallbackTurnaround = destinationPoint(origin, halfDistanceM, 90);
-
-  return generateCustomWalkingCourse({
-    start: origin,
-    turnaround: fallbackTurnaround,
-    finish: origin,
-    token,
-    name: "현재 위치 1K 테스트 코스",
-  });
+  return joinPolylines([outboundPolyline, reversed]);
 }
 
-export async function generateAutoLoopCourseCandidates(params: {
-  origin: LngLat;
-  token: string;
-  targetDistanceM: number;
-  toleranceM?: number;
-}): Promise<AutoLoopCourseCandidate[]> {
-  const { origin, token, targetDistanceM, toleranceM = 500 } = params;
+function makeCandidateKey(endpoint: LngLat): string {
+  return `${endpoint[0].toFixed(5)},${endpoint[1].toFixed(5)}`;
+}
+
+function getEndpointRadiiM(targetDistanceM: number): number[] {
+  const halfTarget = targetDistanceM / 2;
+  const minRadius = Math.max(250, halfTarget - OUT_AND_BACK_ENDPOINT_TOLERANCE_M);
+  const maxRadius = Math.max(minRadius, halfTarget + OUT_AND_BACK_ENDPOINT_TOLERANCE_M);
+
+  const candidates = [
+    halfTarget,
+    halfTarget - 200,
+    halfTarget + 200,
+    halfTarget - 100,
+    halfTarget + 100,
+  ]
+    .map((value) => Math.max(250, value))
+    .filter((value) => value >= minRadius && value <= maxRadius);
+
+  return Array.from(new Set(candidates.map((value) => Math.round(value))));
+}
+
+function getBearingCandidates(): number[] {
+  return [
+    0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330,
+  ];
+}
+
+/**
+ * 기존 RaceMap.tsx와의 호환성을 위해 함수명은 유지한다.
+ *
+ * 하지만 실제 생성 방식은 "loop"가 아니라 "out-and-back"이다.
+ * 즉, 현재 위치에서 목표거리의 절반 정도 떨어진 지점까지 보행 경로를 만들고,
+ * 같은 경로를 역순으로 돌아오는 코스를 만든다.
+ */
+export async function generateAutoLoopCourseCandidates({
+  origin,
+  token,
+  targetDistanceM,
+  toleranceM = DEFAULT_DISTANCE_TOLERANCE_M,
+}: GenerateAutoLoopCourseCandidatesArgs): Promise<AutoLoopCourseCandidate[]> {
+  if (!token) {
+    throw new Error("Mapbox token이 없습니다.");
+  }
 
   if (!Number.isFinite(targetDistanceM) || targetDistanceM <= 0) {
     throw new Error("목표 거리가 올바르지 않습니다.");
   }
 
-  const bearings = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
-  const turnAngles = [70, 90, 110, 130, 150];
-  const scaleFactors = [0.7, 0.82, 0.94, 1.06, 1.18, 1.3];
+  const bearings = getBearingCandidates();
+  const radii = getEndpointRadiiM(targetDistanceM);
 
-  const candidates: AutoLoopCourseCandidate[] = [];
+  const attempts: Array<{
+    bearingDeg: number;
+    radiusM: number;
+    endpoint: LngLat;
+  }> = [];
+
+  bearings.forEach((bearingDeg) => {
+    radii.forEach((radiusM) => {
+      attempts.push({
+        bearingDeg,
+        radiusM,
+        endpoint: destinationPoint(origin, radiusM, bearingDeg),
+      });
+    });
+  });
+
   const seen = new Set<string>();
-  let candidateIndex = 1;
+  const candidates: AutoLoopCourseCandidate[] = [];
 
-  for (const baseBearing of bearings) {
-    for (const turnAngle of turnAngles) {
-      for (const scaleFactor of scaleFactors) {
-        const radiusM =
-          (targetDistanceM /
-            (2 * (1 + Math.sin(toRadians(turnAngle) / 2)))) *
-          scaleFactor;
+  for (const attempt of attempts) {
+    const key = makeCandidateKey(attempt.endpoint);
 
-        const waypointA = destinationPoint(origin, radiusM, baseBearing);
-        const waypointB = destinationPoint(
-          origin,
-          radiusM,
-          baseBearing + turnAngle
-        );
+    if (seen.has(key)) continue;
+    seen.add(key);
 
-        const points = [origin, waypointA, waypointB, origin];
-        const key = makeCandidateKey(points);
+    try {
+      const outbound = await fetchWalkingRoute(
+        [origin, attempt.endpoint],
+        token
+      );
 
-        if (seen.has(key)) continue;
-        seen.add(key);
-
-        const route = await fetchWalkingRouteThroughPoints({
-          points,
-          token,
-        });
-
-        if (!route) continue;
-
-        const distanceM = Math.round(route.distanceM);
-        const distanceErrorM = Math.abs(distanceM - targetDistanceM);
-        const isWithinTolerance = distanceErrorM <= toleranceM;
-
-        candidates.push({
-          id: `auto-loop-${Date.now()}-${candidateIndex}`,
-          candidateId: `auto-loop-candidate-${candidateIndex}`,
-          name: `자동 루프 후보 ${candidateIndex}`,
-          distanceM,
-          polyline: route.coordinates,
-          targetDistanceM,
-          distanceErrorM,
-          isWithinTolerance,
-          waypoints: points,
-        });
-
-        candidateIndex += 1;
+      if (outbound.polyline.length < 2 || outbound.distanceM <= 0) {
+        continue;
       }
+
+      const outAndBackPolyline = makeOutAndBackPolyline(outbound.polyline);
+      const distanceM = outbound.distanceM * 2;
+      const distanceErrorM = Math.abs(distanceM - targetDistanceM);
+      const straightDistanceM = haversineDistanceM(origin, attempt.endpoint);
+
+      candidates.push({
+        id: `out-and-back-${attempt.bearingDeg}-${Math.round(
+          attempt.radiusM
+        )}`,
+        candidateId: `out-and-back-${attempt.bearingDeg}-${Math.round(
+          attempt.radiusM
+        )}`,
+        name: `왕복 후보 ${candidates.length + 1}`,
+        distanceM,
+        distanceErrorM,
+        isWithinTolerance: distanceErrorM <= toleranceM,
+        bearingDeg: attempt.bearingDeg,
+        endpoint: attempt.endpoint,
+        straightDistanceM,
+        outboundDistanceM: outbound.distanceM,
+        polyline: outAndBackPolyline,
+      });
+    } catch (error) {
+      console.warn("Failed to generate out-and-back candidate:", {
+        attempt,
+        error,
+      });
     }
   }
 
-  return candidates.sort((a, b) => {
-    if (a.isWithinTolerance !== b.isWithinTolerance) {
-      return a.isWithinTolerance ? -1 : 1;
-    }
+  return candidates
+    .sort((a, b) => {
+      if (a.isWithinTolerance !== b.isWithinTolerance) {
+        return a.isWithinTolerance ? -1 : 1;
+      }
 
-    return a.distanceErrorM - b.distanceErrorM;
-  });
+      return a.distanceErrorM - b.distanceErrorM;
+    })
+    .slice(0, MAX_CANDIDATES_TO_RETURN)
+    .map((candidate, index) => ({
+      ...candidate,
+      id: `out-and-back-candidate-${index + 1}`,
+      candidateId: `out-and-back-candidate-${index + 1}`,
+      name: `왕복 후보 ${index + 1}`,
+    }));
+}
+
+export async function generateCustomWalkingCourse({
+  start,
+  turnaround,
+  finish,
+  token,
+  name = "커스텀 코스",
+}: GenerateCustomWalkingCourseArgs): Promise<Course> {
+  if (!token) {
+    throw new Error("Mapbox token이 없습니다.");
+  }
+
+  const points = turnaround ? [start, turnaround, finish] : [start, finish];
+
+  if (points.length < 2) {
+    throw new Error("코스 생성을 위한 지점이 부족합니다.");
+  }
+
+  const route = await fetchWalkingRoute(points, token);
+
+  if (route.polyline.length < 2) {
+    throw new Error("코스 경로를 생성하지 못했습니다.");
+  }
+
+  return {
+    id: `custom-course-${Date.now()}`,
+    name,
+    distanceM: route.distanceM,
+    polyline: route.polyline,
+  };
+}
+
+/**
+ * 예전 테스트용 함수와의 호환성을 위한 export.
+ * 현재 RaceMap에서는 사용하지 않아도 된다.
+ */
+export async function generateLocalOutAndBackCourse({
+  origin,
+  token,
+  distanceM = 1000,
+  bearingDeg = 90,
+}: {
+  origin: LngLat;
+  token: string;
+  distanceM?: number;
+  bearingDeg?: number;
+}): Promise<Course> {
+  const endpoint = destinationPoint(origin, Math.max(250, distanceM / 2), bearingDeg);
+  const outbound = await fetchWalkingRoute([origin, endpoint], token);
+  const polyline = makeOutAndBackPolyline(outbound.polyline);
+
+  return {
+    id: `local-out-and-back-${Date.now()}`,
+    name: `현재 위치 기준 왕복 ${(outbound.distanceM * 2 / 1000).toFixed(2)}km`,
+    distanceM: outbound.distanceM * 2,
+    polyline,
+  };
 }
