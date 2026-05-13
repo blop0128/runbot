@@ -5804,6 +5804,18 @@ export default function RaceMap() {
         />
       )}
 
+      {activePanel === "map" && isDrawRouteMode && drawnRouteDistanceM !== null && (
+        <div
+          className={`draw-route-live-distance-badge ${
+            isDrawingRoute ? "draw-route-live-distance-badge-active" : ""
+          }`}
+          aria-live="polite"
+        >
+          <span>그린 길이</span>
+          <strong>{formatDraftDistance(drawnRouteDistanceM)}</strong>
+        </div>
+      )}
+
       <div className="race-top-tabs">
         <button
           type="button"
@@ -6981,11 +6993,9 @@ export default function RaceMap() {
               <div className="truncate text-xs font-semibold text-slate-500">
                 {drawRouteInteractionMode === "move"
                   ? "지도 이동 모드 · 지도를 움직인 뒤 그리기로 돌아오세요."
-                  : isDrawingRoute
-                    ? "그리고 있습니다. 손가락을 떼면 종료됩니다."
-                    : drawnRouteDistanceM
-                      ? `그린 길이 ${formatDraftDistance(drawnRouteDistanceM)}`
-                      : "한 손가락으로 그리고, 두 손가락으로 확대/축소할 수 있습니다."}
+                  : drawnRouteDistanceM
+                    ? `${isDrawingRoute ? "그리는 중 · " : ""}그린 길이 ${formatDraftDistance(drawnRouteDistanceM)}`
+                    : "한 손가락으로 그리고, 두 손가락으로 확대/축소할 수 있습니다."}
               </div>
             </div>
 
@@ -10544,6 +10554,70 @@ export default function RaceMap() {
           color: #0f172a !important;
         }
 
+
+        .draw-route-live-distance-badge {
+          position: absolute;
+          z-index: 58;
+          top: calc(max(8px, env(safe-area-inset-top)) + 108px);
+          left: 50%;
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          max-width: calc(100vw - 36px);
+          transform: translateX(-50%);
+          border: 1px solid rgba(255, 255, 255, 0.72);
+          border-radius: 9999px;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.70),
+              rgba(255, 255, 255, 0.24)
+            );
+          color: #0f172a;
+          padding: 8px 13px;
+          font-size: 12px;
+          font-weight: 900;
+          line-height: 1;
+          pointer-events: none;
+          white-space: nowrap;
+          backdrop-filter: blur(22px) saturate(175%);
+          -webkit-backdrop-filter: blur(22px) saturate(175%);
+          box-shadow:
+            0 14px 34px rgba(15, 23, 42, 0.14),
+            inset 0 1px 0 rgba(255, 255, 255, 0.86),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.28);
+        }
+
+        .draw-route-live-distance-badge span {
+          color: rgba(51, 65, 85, 0.72);
+          font-size: 11px;
+          font-weight: 800;
+        }
+
+        .draw-route-live-distance-badge strong {
+          color: #0f172a;
+          font-size: 13px;
+          font-weight: 950;
+        }
+
+        .draw-route-live-distance-badge-active {
+          border-color: rgba(15, 23, 42, 0.22);
+          background:
+            linear-gradient(
+              135deg,
+              rgba(15, 23, 42, 0.84),
+              rgba(30, 41, 59, 0.58)
+            );
+          color: rgba(255, 255, 255, 0.98);
+          box-shadow:
+            0 18px 42px rgba(15, 23, 42, 0.22),
+            inset 0 1px 0 rgba(255, 255, 255, 0.24);
+        }
+
+        .draw-route-live-distance-badge-active span,
+        .draw-route-live-distance-badge-active strong {
+          color: rgba(255, 255, 255, 0.96);
+        }
 
         /* =========================================================
            Draw route mode
