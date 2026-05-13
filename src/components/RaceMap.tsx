@@ -5712,6 +5712,309 @@ export default function RaceMap() {
             inset 0 1px 0 rgba(255, 255, 255, 0.10);
         }
         }
+
+
+        /* Unified hero-style dark glass cards and controls */
+        .race-setup-panel > div {
+          position: relative;
+          z-index: 2;
+        }
+
+        .race-setup-panel .hero-glass-card,
+        .race-setup-panel .rounded-xl.border,
+        .race-setup-panel .rounded-lg.border,
+        .race-setup-panel .rounded-xl[class*="border"],
+        .race-setup-panel .rounded-lg[class*="border"] {
+          position: relative;
+          overflow: hidden;
+          border: 1px solid rgba(255, 255, 255, 0.30) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(17, 24, 39, 0.68),
+              rgba(68, 52, 40, 0.42)
+            ) !important;
+          color: rgba(255, 255, 255, 0.96) !important;
+          backdrop-filter: blur(26px) saturate(150%);
+          -webkit-backdrop-filter: blur(26px) saturate(150%);
+          box-shadow:
+            0 20px 54px rgba(15, 23, 42, 0.24),
+            inset 0 1px 0 rgba(255, 255, 255, 0.24),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.08) !important;
+        }
+
+        .race-setup-panel .hero-glass-card::before,
+        .race-setup-panel .rounded-xl.border::before,
+        .race-setup-panel .rounded-lg.border::before,
+        .race-setup-panel .rounded-xl[class*="border"]::before,
+        .race-setup-panel .rounded-lg[class*="border"]::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: 0;
+          background:
+            radial-gradient(
+              circle at 16% 0%,
+              rgba(255, 255, 255, 0.20),
+              transparent 38%
+            ),
+            linear-gradient(
+              180deg,
+              rgba(255, 255, 255, 0.16),
+              transparent 44%
+            );
+          pointer-events: none;
+        }
+
+        .race-setup-panel .hero-glass-card > *,
+        .race-setup-panel .rounded-xl.border > *,
+        .race-setup-panel .rounded-lg.border > *,
+        .race-setup-panel .rounded-xl[class*="border"] > *,
+        .race-setup-panel .rounded-lg[class*="border"] > * {
+          position: relative;
+          z-index: 1;
+        }
+
+        /* Card color variations: same hero material, subtle tint only */
+        .race-setup-panel .bg-white,
+        .race-setup-panel [class*="bg-white/"] {
+          background:
+            linear-gradient(
+              135deg,
+              rgba(17, 24, 39, 0.62),
+              rgba(68, 52, 40, 0.38)
+            ) !important;
+        }
+
+        .race-setup-panel .bg-slate-50,
+        .race-setup-panel .bg-slate-100 {
+          background:
+            linear-gradient(
+              135deg,
+              rgba(15, 23, 42, 0.58),
+              rgba(51, 65, 85, 0.34)
+            ) !important;
+        }
+
+        .race-setup-panel .bg-blue-50,
+        .race-setup-panel .bg-indigo-50 {
+          background:
+            linear-gradient(
+              135deg,
+              rgba(15, 23, 42, 0.62),
+              rgba(30, 58, 138, 0.30)
+            ) !important;
+        }
+
+        .race-setup-panel .bg-purple-50,
+        .race-setup-panel .bg-violet-50 {
+          background:
+            linear-gradient(
+              135deg,
+              rgba(17, 24, 39, 0.62),
+              rgba(88, 28, 135, 0.28)
+            ) !important;
+        }
+
+        .race-setup-panel .bg-emerald-50,
+        .race-setup-panel .bg-green-50 {
+          background:
+            linear-gradient(
+              135deg,
+              rgba(17, 24, 39, 0.62),
+              rgba(20, 83, 45, 0.30)
+            ) !important;
+        }
+
+        .race-setup-panel .bg-orange-50,
+        .race-setup-panel .bg-yellow-50 {
+          background:
+            linear-gradient(
+              135deg,
+              rgba(17, 24, 39, 0.62),
+              rgba(120, 53, 15, 0.30)
+            ) !important;
+        }
+
+        .race-setup-panel .bg-red-50 {
+          background:
+            linear-gradient(
+              135deg,
+              rgba(17, 24, 39, 0.62),
+              rgba(127, 29, 29, 0.30)
+            ) !important;
+        }
+
+        /* Make legacy text colors readable on dark hero-style cards */
+        .race-setup-panel .rounded-xl.border .text-slate-950,
+        .race-setup-panel .rounded-xl.border .text-slate-900,
+        .race-setup-panel .rounded-xl.border .text-slate-800,
+        .race-setup-panel .rounded-xl.border .text-slate-700,
+        .race-setup-panel .rounded-lg.border .text-slate-950,
+        .race-setup-panel .rounded-lg.border .text-slate-900,
+        .race-setup-panel .rounded-lg.border .text-slate-800,
+        .race-setup-panel .rounded-lg.border .text-slate-700 {
+          color: rgba(255, 255, 255, 0.94) !important;
+        }
+
+        .race-setup-panel .rounded-xl.border .text-slate-600,
+        .race-setup-panel .rounded-xl.border .text-slate-500,
+        .race-setup-panel .rounded-xl.border .text-slate-400,
+        .race-setup-panel .rounded-lg.border .text-slate-600,
+        .race-setup-panel .rounded-lg.border .text-slate-500,
+        .race-setup-panel .rounded-lg.border .text-slate-400 {
+          color: rgba(226, 232, 240, 0.76) !important;
+        }
+
+        .race-setup-panel .rounded-xl.border .text-blue-700,
+        .race-setup-panel .rounded-lg.border .text-blue-700,
+        .race-setup-panel .rounded-xl.border .text-orange-700,
+        .race-setup-panel .rounded-lg.border .text-orange-700,
+        .race-setup-panel .rounded-xl.border .text-emerald-700,
+        .race-setup-panel .rounded-lg.border .text-emerald-700 {
+          color: rgba(209, 250, 229, 0.92) !important;
+        }
+
+        .race-setup-panel .rounded-xl.border .text-red-700,
+        .race-setup-panel .rounded-lg.border .text-red-700 {
+          color: rgba(254, 202, 202, 0.96) !important;
+        }
+
+        .race-setup-panel input {
+          border: 1px solid rgba(255, 255, 255, 0.28) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(15, 23, 42, 0.40),
+              rgba(255, 255, 255, 0.10)
+            ) !important;
+          color: rgba(255, 255, 255, 0.96) !important;
+          backdrop-filter: blur(22px) saturate(145%);
+          -webkit-backdrop-filter: blur(22px) saturate(145%);
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.16),
+            0 10px 24px rgba(15, 23, 42, 0.12) !important;
+        }
+
+        .race-setup-panel input::placeholder {
+          color: rgba(226, 232, 240, 0.64) !important;
+        }
+
+        /* All main course buttons should match hero-card material exactly */
+        .course-action-button,
+        .course-action-primary {
+          position: relative;
+          overflow: hidden;
+          border: 1px solid rgba(255, 255, 255, 0.30) !important;
+          border-radius: 16px;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(17, 24, 39, 0.68),
+              rgba(68, 52, 40, 0.42)
+            ) !important;
+          color: rgba(255, 255, 255, 0.96) !important;
+          font-weight: 900;
+          letter-spacing: -0.01em;
+          backdrop-filter: blur(26px) saturate(150%);
+          -webkit-backdrop-filter: blur(26px) saturate(150%);
+          box-shadow:
+            0 20px 54px rgba(15, 23, 42, 0.24),
+            inset 0 1px 0 rgba(255, 255, 255, 0.24),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.08) !important;
+          transition:
+            transform 150ms ease,
+            filter 150ms ease,
+            box-shadow 150ms ease,
+            background 150ms ease;
+        }
+
+        .course-action-button::before,
+        .course-action-primary::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          background:
+            radial-gradient(
+              circle at 16% 0%,
+              rgba(255, 255, 255, 0.20),
+              transparent 38%
+            ),
+            linear-gradient(
+              180deg,
+              rgba(255, 255, 255, 0.16),
+              transparent 44%
+            );
+          pointer-events: none;
+        }
+
+        .course-action-button:hover:not(:disabled),
+        .course-action-primary:hover:not(:disabled) {
+          filter: brightness(1.04);
+        }
+
+        .course-action-button:active:not(:disabled),
+        .course-action-primary:active:not(:disabled) {
+          transform: translateY(1px) scale(0.972);
+          filter: brightness(0.92);
+          box-shadow:
+            0 8px 22px rgba(15, 23, 42, 0.24),
+            inset 0 4px 12px rgba(15, 23, 42, 0.28),
+            inset 0 1px 0 rgba(255, 255, 255, 0.10) !important;
+        }
+
+        /* Secondary setup buttons use the same material with slightly lower emphasis */
+        .race-setup-panel button.bg-white,
+        .race-setup-panel button.bg-slate-100,
+        .race-setup-panel button[class*="bg-white/"],
+        .race-setup-panel button[class*="border-dashed"] {
+          border: 1px solid rgba(255, 255, 255, 0.26) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(17, 24, 39, 0.52),
+              rgba(68, 52, 40, 0.28)
+            ) !important;
+          color: rgba(255, 255, 255, 0.92) !important;
+          backdrop-filter: blur(24px) saturate(145%);
+          -webkit-backdrop-filter: blur(24px) saturate(145%);
+          box-shadow:
+            0 14px 34px rgba(15, 23, 42, 0.18),
+            inset 0 1px 0 rgba(255, 255, 255, 0.18) !important;
+        }
+
+        .race-setup-panel button[class*="bg-slate-900"],
+        .race-setup-panel button[class*="bg-slate-950"],
+        .race-setup-panel button[class*="bg-slate-800"] {
+          border: 1px solid rgba(255, 255, 255, 0.30) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(17, 24, 39, 0.72),
+              rgba(68, 52, 40, 0.42)
+            ) !important;
+          color: rgba(255, 255, 255, 0.96) !important;
+          backdrop-filter: blur(26px) saturate(150%);
+          -webkit-backdrop-filter: blur(26px) saturate(150%);
+          box-shadow:
+            0 18px 46px rgba(15, 23, 42, 0.22),
+            inset 0 1px 0 rgba(255, 255, 255, 0.20) !important;
+        }
+
+        .race-setup-panel button:disabled {
+          border-color: rgba(255, 255, 255, 0.18) !important;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(17, 24, 39, 0.32),
+              rgba(68, 52, 40, 0.18)
+            ) !important;
+          color: rgba(226, 232, 240, 0.48) !important;
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.10),
+            0 8px 20px rgba(15, 23, 42, 0.10) !important;
+        }
+
       `}</style>
     </div>
   );
