@@ -2142,6 +2142,7 @@ function makeAutoLoopCandidatesGeoJson(
           color: getAutoLoopCandidateColor(originalIndex),
           opacity: isPreviewing ? 0.94 : 0.24,
           width: isPreviewing ? 7 : 5,
+          sortKey: isPreviewing ? 10 : originalIndex,
         },
         geometry: {
           type: "LineString",
@@ -3608,6 +3609,7 @@ export default function RaceMap() {
         layout: {
           "line-join": "round",
           "line-cap": "round",
+          "line-sort-key": ["get", "sortKey"] as any,
         },
         paint: {
           "line-width": ["get", "width"] as any,
@@ -3630,6 +3632,11 @@ export default function RaceMap() {
         "auto-loop-candidates-line",
         "line-color",
         ["get", "color"] as any
+      );
+      map.setLayoutProperty(
+        "auto-loop-candidates-line",
+        "line-sort-key",
+        ["get", "sortKey"] as any
       );
     }
 
@@ -7559,6 +7566,16 @@ export default function RaceMap() {
                     return (
                       <div
                         key={candidate.candidateId}
+                        role="button"
+                        tabIndex={0}
+                        aria-pressed={isPreviewing}
+                        onClick={() => handlePreviewAutoLoopCandidate(candidate, index)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            handlePreviewAutoLoopCandidate(candidate, index);
+                          }
+                        }}
                         className={`candidate-course-card ${
                           isPreviewing
                             ? "candidate-course-card-previewing"
@@ -7617,7 +7634,10 @@ export default function RaceMap() {
                           <div className="candidate-course-card-actions">
                             <button
                               type="button"
-                              onClick={() => handlePreviewAutoLoopCandidate(candidate, index)}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                handlePreviewAutoLoopCandidate(candidate, index);
+                              }}
                               className={`candidate-card-action-button ${
                                 isPreviewing
                                   ? "candidate-card-action-button-active"
@@ -7629,7 +7649,10 @@ export default function RaceMap() {
 
                             <button
                               type="button"
-                              onClick={() => handleApplyAutoLoopCandidate(candidate)}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                handleApplyAutoLoopCandidate(candidate);
+                              }}
                               className="candidate-card-action-button candidate-card-action-button-primary"
                             >
                               이 코스로 달리기
@@ -11158,6 +11181,7 @@ export default function RaceMap() {
         }
 
         .candidate-course-card {
+          cursor: pointer;
           border: 1px solid rgba(255, 255, 255, 0.62);
           border-radius: 18px;
           background:
@@ -11187,6 +11211,11 @@ export default function RaceMap() {
 
         .candidate-course-card-ok {
           border-color: rgba(16, 185, 129, 0.30);
+        }
+
+        .candidate-course-card:focus-visible {
+          outline: 2px solid rgba(37, 99, 235, 0.42);
+          outline-offset: 3px;
         }
 
         .candidate-course-card-content {
