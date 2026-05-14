@@ -11,7 +11,6 @@ import {
 import mapboxgl from "mapbox-gl";
 import {
   generateAutoLoopCourseCandidates,
-  generateCustomWalkingCourse,
   type AutoLoopCourseCandidate,
   type Course,
   type LngLat,
@@ -1925,6 +1924,191 @@ async function generateDrawnRouteCandidates({
     });
 }
 
+
+function makeOutAndBackRouteFromOutboundRoute(route: {
+  distanceM: number;
+  polyline: LngLat[];
+}): {
+  distanceM: number;
+  polyline: LngLat[];
+} {
+  const returnPolyline = route.polyline.slice(0, -1).reverse();
+
+  return {
+    distanceM: route.distanceM * 2,
+    polyline: removeConsecutiveDuplicatePoints([
+      ...route.polyline,
+      ...returnPolyline,
+    ]),
+  };
+}
+
+function getCustomRouteWaypointAttempts(start: LngLat, finish: LngLat): LngLat[][] {
+  const straightDistanceM = haversineDistanceM(start, finish);
+
+  if (straightDistanceM < 20) {
+    return [[start, finish]];
+  }
+
+  const bearing = bearingBetweenPointsDeg(start, finish);
+  const midpoint = destinationPoint(start, straightDistanceM / 2, bearing);
+  const offsetM = clampNumber(straightDistanceM * 0.18, 80, 360);
+  const smallOffsetM = clampNumber(straightDistanceM * 0.10, 50, 220);
+  const leftMidpoint = destinationPoint(midpoint, offsetM, bearing - 90);
+  const rightMidpoint = destinationPoint(midpoint, offsetM, bearing + 90);
+  const softLeftMidpoint = destinationPoint(midpoint, smallOffsetM, bearing - 90);
+  const softRightMidpoint = destinationPoint(midpoint, smallOffsetM, bearing + 90);
+
+  return [
+    [start, finish],
+    [start, midpoint, finish],
+    [start, softLeftMidpoint, finish],
+    [start, softRightMidpoint, finish],
+    [start, leftMidpoint, finish],
+    [start, rightMidpoint, finish],
+  ];
+}
+
+function getCustomCandidateBaseName(index: number): string {
+  return ["기본 후보", "실전 코스 후보", "거리 균형 후보"][index] ?? "대안 후보";
+}
+
+async function generateCustomCourseCandidates({
+  start,
+  finish,
+  routeMode,
+  targetDistanceM,
+  token,
+  signal,
+}: {
+  start: LngLat;
+  finish: LngLat;
+  routeMode: CustomRouteMode;
+  targetDistanceM: number;
+  token: string;
+  signal?: AbortSignal;
+}): Promise<AutoLoopCourseCandidate[]> {
+  throwIfCourseSearchAborted(signal);
+
+  if (!token) {
+    throw new Error("Mapbox token이 없습니다.");
+  }
+
+  if (haversineDistanceM(start, finish) < 20) {
+    throw new Error("시작점과 목표지점이 너무 가깝습니다.");
+  }
+
+  const attempts = getCustomRouteWaypointAttempts(start, finish);
+  const routePool: Array<{
+    route: { distanceM: number; polyline: LngLat[] };
+    source: "direct" | "waypoint";
+  }> = [];
+  const seenRouteKeys = new Set<string>();
+
+  const addOutboundRoute = (
+    outboundRoute: { distanceM: number; polyline: LngLat[] },
+    source: "direct" | "waypoint"
+  ) => {
+    const finalRoute =
+      routeMode === "outAndBack"
+        ? makeOutAndBackRouteFromOutboundRoute(outboundRoute)
+        : outboundRoute;
+    const key = makeDrawRouteCandidateKey(finalRoute);
+
+    if (seenRouteKeys.has(key)) return;
+    seenRouteKeys.add(key);
+
+    routePool.push({ route: finalRoute, source });
+  };
+
+  for (const [index, attempt] of attempts.entries()) {
+    throwIfCourseSearchAborted(signal);
+
+    try {
+      const routes = await fetchWalkingRouteVariants(
+        attempt,
+        token,
+        index === 0,
+        signal
+      );
+
+      routes.forEach((route) => {
+        addOutboundRoute(route, index === 0 ? "direct" : "waypoint");
+      });
+    } catch (error) {
+      if (isCourseSearchAbortError(error)) throw error;
+      console.warn("Failed to generate custom route candidate:", {
+        attempt,
+        error,
+      });
+    }
+  }
+
+  if (routePool.length === 0) {
+    throw new Error("선택한 지점 기준으로 만들 수 있는 보행 코스를 찾지 못했습니다.");
+  }
+
+  const makeCandidate = (
+    item: { route: { distanceM: number; polyline: LngLat[] }; source: "direct" | "waypoint" },
+    roleIndex: number
+  ): AutoLoopCourseCandidate => {
+    const distanceErrorM = Math.abs(item.route.distanceM - targetDistanceM);
+
+    return {
+      id: `custom-course-candidate-${roleIndex + 1}`,
+      candidateId: `custom-course-candidate-${roleIndex + 1}`,
+      name: getCustomCandidateBaseName(roleIndex),
+      distanceM: item.route.distanceM,
+      distanceErrorM,
+      isWithinTolerance: distanceErrorM <= Math.max(350, targetDistanceM * 0.18),
+      bearingDeg: bearingBetweenPointsDeg(start, finish),
+      endpoint: finish,
+      straightDistanceM: haversineDistanceM(start, finish),
+      outboundDistanceM:
+        routeMode === "outAndBack" ? item.route.distanceM / 2 : item.route.distanceM,
+      polyline: item.route.polyline,
+    };
+  };
+
+  const selected: Array<{ route: { distanceM: number; polyline: LngLat[] }; source: "direct" | "waypoint" }> = [];
+  const pushDistinct = (item: { route: { distanceM: number; polyline: LngLat[] }; source: "direct" | "waypoint" } | undefined) => {
+    if (!item) return;
+    const key = makeDrawRouteCandidateKey(item.route);
+    if (selected.some((current) => makeDrawRouteCandidateKey(current.route) === key)) return;
+    selected.push(item);
+  };
+
+  pushDistinct(routePool.find((item) => item.source === "direct") ?? routePool[0]);
+
+  pushDistinct(
+    [...routePool]
+      .filter((item) => !selected.some((current) => makeDrawRouteCandidateKey(current.route) === makeDrawRouteCandidateKey(item.route)))
+      .sort((a, b) => {
+        const aCandidate = makeCandidate(a, 1);
+        const bCandidate = makeCandidate(b, 1);
+        return getPracticalCandidateScore(aCandidate) - getPracticalCandidateScore(bCandidate);
+      })[0]
+  );
+
+  pushDistinct(
+    [...routePool]
+      .filter((item) => !selected.some((current) => makeDrawRouteCandidateKey(current.route) === makeDrawRouteCandidateKey(item.route)))
+      .sort((a, b) => {
+        return (
+          Math.abs(a.route.distanceM - targetDistanceM) -
+          Math.abs(b.route.distanceM - targetDistanceM)
+        );
+      })[0]
+  );
+
+  for (const item of routePool) {
+    if (selected.length >= 3) break;
+    pushDistinct(item);
+  }
+
+  return selected.slice(0, 3).map((item, index) => makeCandidate(item, index));
+}
+
 function parsePaceInput(input: string): number {
   const trimmed = input.trim();
 
@@ -2165,7 +2349,12 @@ function getCandidateRecommendationLabel(
   candidate: AutoLoopCourseCandidate,
   index: number
 ): string {
+  const isCustomCandidate = candidate.candidateId.startsWith("custom-course-candidate");
   const isDrawnCandidate = /그리기|원형|루프/.test(candidate.name);
+
+  if (isCustomCandidate) {
+    return ["기본 후보", "실전 코스 후보", "거리 균형 후보"][index] ?? "대안 후보";
+  }
 
   if (isDrawnCandidate) {
     return ["그림 유사 후보", "실전 코스 후보", "거리 정확 후보"][index] ?? "대안 후보";
@@ -3232,7 +3421,10 @@ export default function RaceMap() {
   }, [drawnRoutePoints]);
 
   const isGeneratingAnyCourse =
-    isGeneratingAutoLoop || isGeneratingOneWay || isGeneratingDrawRouteCandidates;
+    isGeneratingAutoLoop ||
+    isGeneratingOneWay ||
+    isGeneratingDrawRouteCandidates ||
+    isGeneratingCustomCourse;
 
   const isAutoLoopPanelVisible =
     isGeneratingAutoLoop ||
@@ -3708,7 +3900,12 @@ export default function RaceMap() {
   }
 
   function handleStopCourseSearch() {
-    if (!isGeneratingAutoLoop && !isGeneratingOneWay && !isGeneratingDrawRouteCandidates) {
+    if (
+      !isGeneratingAutoLoop &&
+      !isGeneratingOneWay &&
+      !isGeneratingDrawRouteCandidates &&
+      !isGeneratingCustomCourse
+    ) {
       return;
     }
 
@@ -3719,8 +3916,10 @@ export default function RaceMap() {
     setIsGeneratingAutoLoop(false);
     setIsGeneratingOneWay(false);
     setIsGeneratingDrawRouteCandidates(false);
+    setIsGeneratingCustomCourse(false);
     setAutoLoopError(null);
     setDrawRouteError(null);
+    setCustomCourseError(null);
     setStatus("코스 탐색을 중지했습니다.");
   }
 
@@ -4366,12 +4565,14 @@ export default function RaceMap() {
   }
 
   function handleApplyAutoLoopCandidate(candidate: AutoLoopCourseCandidate) {
+    const isCustomCandidate = candidate.candidateId.startsWith("custom-course-candidate");
     const mode = candidateMode;
-    const label = getCandidateModeLabel(mode);
+    const label = isCustomCandidate ? "커스텀" : getCandidateModeLabel(mode);
+    const trimmedName = customCourseName.trim();
 
     const nextCourse: Course = {
       id: candidate.id,
-      name: `${candidate.name} · ${(candidate.distanceM / 1000).toFixed(2)}km`,
+      name: `${trimmedName || candidate.name} · ${(candidate.distanceM / 1000).toFixed(2)}km`,
       distanceM: candidate.distanceM,
       polyline: candidate.polyline,
     };
@@ -4383,9 +4584,10 @@ export default function RaceMap() {
 
     setIsCustomCourseMode(false);
     setCustomGuide(null);
+    setCustomPointStep("start");
     setCustomPoints(INITIAL_CUSTOM_POINTS);
     setPlayerMode("gps");
-    setActiveCourseMode(mode);
+    setActiveCourseMode(isCustomCandidate ? "custom" : mode);
     setActiveCourseOriginId(null);
     setActiveCourseTurnaround(mode === "outAndBack" ? candidate.endpoint : null);
     setActiveCourse(nextCourse);
@@ -4398,13 +4600,61 @@ export default function RaceMap() {
     );
   }
 
+  function handleSaveCustomCandidate(candidate: AutoLoopCourseCandidate) {
+    const trimmedName = customCourseName.trim();
+    const finalName =
+      trimmedName || `${candidate.name} · ${(candidate.distanceM / 1000).toFixed(2)}km`;
+    const nextCourse: Course = {
+      id: `custom-preview-${candidate.candidateId}`,
+      name: finalName,
+      distanceM: candidate.distanceM,
+      polyline: candidate.polyline,
+    };
+    const storedCustomCourse = makeStoredCourseRecord({
+      course: nextCourse,
+      name: finalName,
+      turnaround: candidateMode === "outAndBack" ? candidate.endpoint : null,
+      source: "custom",
+      courseMode: "custom",
+    });
+
+    setCourseLibrary((current) => [storedCustomCourse, ...current]);
+    gpsTracker.stop();
+    latestGpsProjectionRef.current = null;
+    clearCustomPointMarkers();
+    clearAutoLoopCandidates();
+
+    setIsCustomCourseMode(false);
+    setCustomGuide(null);
+    setCustomPointStep("start");
+    setCustomPoints(INITIAL_CUSTOM_POINTS);
+    setActiveCourseMode("custom");
+    setActiveCourseOriginId(storedCustomCourse.courseId);
+    setActiveCourseTurnaround(storedCustomCourse.turnaround);
+    setActiveCourse(nextCourse);
+    setActivePanel("map");
+    setSetupView("main");
+    setStatus(`커스텀 후보를 나의 코스에 저장했습니다 · ${(candidate.distanceM / 1000).toFixed(2)}km`);
+  }
+
   function handleCloseAutoLoopPanel() {
-    if (isGeneratingAutoLoop || isGeneratingOneWay || isGeneratingDrawRouteCandidates) {
+    if (
+      isGeneratingAutoLoop ||
+      isGeneratingOneWay ||
+      isGeneratingDrawRouteCandidates ||
+      isGeneratingCustomCourse
+    ) {
       handleStopCourseSearch();
     }
 
+    const label = isCustomCandidatePanel
+      ? "커스텀"
+      : isDrawnCandidatePanel
+        ? "그리기"
+        : getCandidateModeLabel(candidateMode);
+
     clearAutoLoopCandidates();
-    setStatus(`${getCandidateModeLabel(candidateMode)} 후보 보기를 닫았습니다.`);
+    setStatus(`${label} 후보 보기를 닫았습니다.`);
   }
 
   useEffect(() => {
@@ -5459,7 +5709,7 @@ export default function RaceMap() {
   }
 
   async function handleBuildCustomCourse() {
-    if (isRunning) return;
+    if (isRunning || isGeneratingAnyCourse) return;
 
     const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
 
@@ -5474,82 +5724,74 @@ export default function RaceMap() {
     }
 
     if (!customPoints.finish) {
-      setCustomCourseError("종료지점은 필수입니다.");
+      setCustomCourseError("목표지점은 필수입니다.");
       return;
     }
 
-    const trimmedName = customCourseName.trim();
+    const targetDistanceM = customDraftDistanceM ?? 0;
     const routeModeLabel = customRouteMode === "outAndBack" ? "왕복" : "편도";
-    const finalName =
-      trimmedName || `커스텀 코스 ${sortedCourseLibrary.length + 1} · ${routeModeLabel}`;
-
-    const routeTurnaround =
-      customRouteMode === "outAndBack" ? customPoints.finish : null;
-    const routeFinish =
-      customRouteMode === "outAndBack" ? customPoints.start : customPoints.finish;
+    const { runId, signal } = beginCourseSearch();
 
     try {
       setIsGeneratingCustomCourse(true);
       setCustomCourseError(null);
-      setStatus("선택한 지점 기준으로 커스텀 코스를 생성하는 중...");
-
-      const nextCourse = await generateCustomWalkingCourse({
-        start: customPoints.start,
-        turnaround: routeTurnaround,
-        finish: routeFinish,
-        token,
-        name: finalName,
-      });
-
-      let storedCustomCourse: StoredCourseRecord | null = null;
-
-      if (shouldSaveCustomCourse) {
-        storedCustomCourse = makeStoredCourseRecord({
-          course: nextCourse,
-          name: finalName,
-          turnaround: routeTurnaround,
-          source: "custom",
-          courseMode: "custom",
-        });
-
-        setCourseLibrary((current) => [storedCustomCourse!, ...current]);
-      }
-
-      gpsTracker.stop();
-      latestGpsProjectionRef.current = null;
-      clearCustomPointMarkers();
+      setAutoLoopError(null);
+      setCandidateMode(customRouteMode);
+      setStatus("선택한 지점 기준으로 커스텀 코스 후보를 만드는 중...");
       clearAutoLoopCandidates();
 
+      const candidates = await generateCustomCourseCandidates({
+        start: customPoints.start,
+        finish: customPoints.finish,
+        routeMode: customRouteMode,
+        targetDistanceM,
+        token,
+        signal,
+      });
+
+      if (!isCurrentCourseSearch(runId, signal)) {
+        return;
+      }
+
+      if (candidates.length === 0) {
+        setCustomCourseError("선택한 지점 기준으로 만들 수 있는 후보를 찾지 못했습니다.");
+        setStatus("커스텀 후보 없음");
+        return;
+      }
+
+      clearCustomPointMarkers();
       setIsCustomCourseMode(false);
       setCustomGuide(null);
-      setCustomPointStep("start");
-      setCustomPoints(INITIAL_CUSTOM_POINTS);
-      setCustomCourseName("");
-      setActiveCourseMode("custom");
-      setActiveCourseOriginId(storedCustomCourse?.courseId ?? null);
-      setActiveCourseTurnaround(routeTurnaround);
-      setActiveCourse(nextCourse);
+      setIsAutoLoopPanelCollapsed(false);
       setActivePanel("map");
       setSetupView("main");
-      setStatus(
-        shouldSaveCustomCourse
-          ? `커스텀 코스 생성 및 저장 완료 · ${(nextCourse.distanceM / 1000).toFixed(
-              2
-            )}km`
-          : `저장 없이 커스텀 코스 생성 완료 · ${(nextCourse.distanceM / 1000).toFixed(
-              2
-            )}km`
-      );
+      setAutoLoopAllCandidates(candidates);
+      showAutoLoopCandidatePage(candidates, 0, customRouteMode);
+      setStatus(`${routeModeLabel} 커스텀 후보 ${candidates.length}개 표시 중`);
     } catch (rawError) {
+      if (isCourseSearchAbortError(rawError)) {
+        if (isCurrentCourseSearch(runId, signal)) {
+          setStatus("코스 탐색을 중지했습니다.");
+        }
+        return;
+      }
+
+      if (!isCurrentCourseSearch(runId, signal)) {
+        return;
+      }
+
       const message =
         rawError instanceof Error
           ? rawError.message
-          : "커스텀 코스를 생성하지 못했습니다.";
+          : "커스텀 코스 후보를 생성하지 못했습니다.";
 
       setCustomCourseError(message);
-      setStatus("커스텀 코스 생성 실패");
+      setStatus("커스텀 후보 생성 실패");
     } finally {
-      setIsGeneratingCustomCourse(false);
+      if (isCurrentCourseSearch(runId, signal)) {
+        setIsGeneratingCustomCourse(false);
+        finishCourseSearch(runId);
+      }
     }
   }
 
@@ -5939,9 +6181,18 @@ export default function RaceMap() {
     autoLoopCandidates.some((candidate) =>
       candidate.candidateId.startsWith("draw-route-candidate")
     );
-  const candidateModeLabel = isDrawnCandidatePanel
-    ? "그리기"
-    : getCandidateModeLabel(candidateMode);
+  const isCustomCandidatePanel =
+    autoLoopAllCandidates.some((candidate) =>
+      candidate.candidateId.startsWith("custom-course-candidate")
+    ) ||
+    autoLoopCandidates.some((candidate) =>
+      candidate.candidateId.startsWith("custom-course-candidate")
+    );
+  const candidateModeLabel = isCustomCandidatePanel
+    ? "커스텀"
+    : isDrawnCandidatePanel
+      ? "그리기"
+      : getCandidateModeLabel(candidateMode);
 
   const currentMapLocationText = currentMapLocation
     ? `${currentMapLocation[1].toFixed(5)}, ${currentMapLocation[0].toFixed(5)}`
@@ -7547,7 +7798,9 @@ export default function RaceMap() {
               {autoLoopCandidates.length > 0 && (
                 <div className="space-y-2">
                   <div className="candidate-sheet-info-card text-xs text-slate-600">
-                    추천 기준: 1순위 유사도 · 2순위 실전성 · 3순위 거리 정확도
+                    {isCustomCandidatePanel
+                      ? "추천 기준: 기본 경로 · 실전 코스 · 거리 균형"
+                      : "추천 기준: 1순위 유사도 · 2순위 실전성 · 3순위 거리 정확도"}
                     {autoLoopRemainingCount > 0 && (
                       <span> · 다른 후보 {autoLoopRemainingCount}개</span>
                     )}
@@ -7616,9 +7869,13 @@ export default function RaceMap() {
                             )}
 
                             <div className="text-[11px] text-slate-500">
-                              {candidate.isWithinTolerance
-                                ? "허용 오차 ±0.5km 안"
-                                : "허용 오차 밖"}
+                              {isCustomCandidatePanel
+                                ? customRouteMode === "outAndBack"
+                                  ? "선택 지점 왕복 기준 후보"
+                                  : "선택 지점 편도 기준 후보"
+                                : candidate.isWithinTolerance
+                                  ? "허용 오차 ±0.5km 안"
+                                  : "허용 오차 밖"}
                             </div>
 
                             <div className="mt-1 text-[11px] font-semibold text-slate-700">
@@ -7646,6 +7903,19 @@ export default function RaceMap() {
                             >
                               지도에서 보기
                             </button>
+
+                            {isCustomCandidatePanel && (
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleSaveCustomCandidate(candidate);
+                                }}
+                                className="candidate-card-action-button"
+                              >
+                                저장
+                              </button>
+                            )}
 
                             <button
                               type="button"
@@ -7870,10 +8140,10 @@ export default function RaceMap() {
                   />
                   <span>
                     <span className="block font-bold text-slate-900">
-                      나의 코스에 저장
+                      후보 선택 후 저장 가능
                     </span>
                     <span className="block text-[11px] text-slate-500">
-                      체크를 끄면 이번에 만든 코스만 지도에 적용하고, 목록에는 저장하지 않습니다.
+                      후보를 먼저 확인한 뒤 카드에서 저장하거나 바로 달리기를 선택할 수 있습니다.
                     </span>
                   </span>
                 </label>
@@ -7900,11 +8170,7 @@ export default function RaceMap() {
                   disabled={!canBuildCustomCourse}
                   className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
-                  {isGeneratingCustomCourse
-                    ? "생성 중..."
-                    : shouldSaveCustomCourse
-                      ? "커스텀 코스 저장"
-                      : "저장 없이 코스 생성"}
+                  {isGeneratingCustomCourse ? "후보 만드는 중..." : "후보 만들기"}
                 </button>
               </div>
 
