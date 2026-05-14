@@ -3104,9 +3104,6 @@ export default function RaceMap() {
   const isGeneratingAnyCourse =
     isGeneratingAutoLoop || isGeneratingOneWay || isGeneratingDrawRouteCandidates;
 
-  const canGenerateDrawnRouteCandidates =
-    drawnRoutePoints.length >= 2 && !isGeneratingAnyCourse;
-
   const isAutoLoopPanelVisible =
     isGeneratingAutoLoop ||
     isGeneratingOneWay ||
@@ -4901,8 +4898,6 @@ export default function RaceMap() {
   }
 
   function handleSetDrawRouteInteractionMode(mode: DrawRouteInteractionMode) {
-    if (isGeneratingDrawRouteCandidates) return;
-
     clearDrawRoutePointerSession();
     setDrawRouteInteractionMode(mode);
     setDrawRouteError(null);
@@ -4964,11 +4959,19 @@ export default function RaceMap() {
   }
 
   function handleResetDrawRoute() {
+    if (isGeneratingDrawRouteCandidates) {
+      courseSearchAbortControllerRef.current?.abort();
+      courseSearchAbortControllerRef.current = null;
+      courseSearchRunIdRef.current += 1;
+      setIsGeneratingDrawRouteCandidates(false);
+    }
+
     setDrawnRoutePoints([]);
     drawnRoutePointsRef.current = [];
     setDrawRouteError(null);
     clearDrawRoutePointerSession();
     clearDrawRouteOverlay();
+    setIsDrawPanelCollapsed(false);
     setStatus("그린 선을 초기화했습니다. 다시 지도 위에 그려주세요.");
   }
 
@@ -5050,6 +5053,11 @@ export default function RaceMap() {
 
     if (drawRouteInteractionMode !== "draw") return;
 
+    if (!isDrawingRoute && drawnRoutePointsRef.current.length >= 2) {
+      setStatus("이미 그린 선이 인식되었습니다. 다시 그리기를 눌러 새 코스를 그려주세요.");
+      return;
+    }
+
     const point = getLngLatFromPointerEvent(event);
     if (!point) return;
 
@@ -5064,7 +5072,7 @@ export default function RaceMap() {
     updateDrawRouteOverlay([point]);
     setIsDrawingRoute(true);
     setIsDrawPanelCollapsed(true);
-    setStatus("손가락을 떼면 그린 방향 기준 후보를 만들 수 있습니다.");
+    setStatus("손가락을 떼면 자동으로 코스 후보를 찾습니다.");
   }
 
   function handleDrawRoutePointerMove(event: PointerEvent<HTMLElement>) {
@@ -5123,7 +5131,8 @@ export default function RaceMap() {
       return;
     }
 
-    setStatus("그린 선을 확인했습니다. 후보 찾기를 눌러 가능한 코스를 생성하세요.");
+    setStatus("그린 선을 확인했습니다. 가능한 코스 후보를 자동으로 찾는 중...");
+    void handleGenerateDrawnRouteCandidates();
   }
 
   function handleDrawRoutePointerCancel(event: PointerEvent<HTMLElement>) {
@@ -6513,7 +6522,6 @@ export default function RaceMap() {
           <button
             type="button"
             onClick={() => handleSetDrawRouteInteractionMode("draw")}
-            disabled={isGeneratingDrawRouteCandidates}
             aria-label="그리기 모드"
             title="그리기 모드"
             className={`draw-route-floating-mode-button ${
@@ -6526,7 +6534,6 @@ export default function RaceMap() {
           <button
             type="button"
             onClick={() => handleSetDrawRouteInteractionMode("move")}
-            disabled={isGeneratingDrawRouteCandidates}
             aria-label="지도 이동 모드"
             title="지도 이동 모드"
             className={`draw-route-floating-mode-button ${
@@ -7681,24 +7688,15 @@ export default function RaceMap() {
               <div className="truncate text-xs font-semibold text-slate-500">
                 {drawRouteInteractionMode === "move"
                   ? "지도 이동 모드 · 지도를 움직인 뒤 그리기로 돌아오세요."
-                  : drawnRouteDistanceM
-                    ? `${isDrawingRoute ? "그리는 중 · " : ""}그린 길이 ${formatDraftDistance(drawnRouteDistanceM)}`
-                    : "한 손가락으로 그리고, 두 손가락으로 확대/축소할 수 있습니다."}
+                  : isGeneratingDrawRouteCandidates
+                    ? `자동 후보 탐색 중 · 그린 길이 ${formatDraftDistance(drawnRouteDistanceM)}`
+                    : drawnRouteDistanceM
+                      ? `${isDrawingRoute ? "그리는 중 · " : "인식 완료 · "}그린 길이 ${formatDraftDistance(drawnRouteDistanceM)}`
+                      : "한 손가락으로 그리고, 두 손가락으로 확대/축소할 수 있습니다."}
               </div>
             </div>
 
             <div className="flex shrink-0 gap-1 bottom-sheet-icon-actions">
-              {isDrawPanelCollapsed && drawnRoutePoints.length >= 2 && (
-                <button
-                  type="button"
-                  onClick={handleGenerateDrawnRouteCandidates}
-                  disabled={!canGenerateDrawnRouteCandidates}
-                  className="candidate-sheet-control-button candidate-sheet-control-button-primary disabled:cursor-not-allowed"
-                >
-                  후보 찾기
-                </button>
-              )}
-
               <button
                 type="button"
                 onClick={() => setIsDrawPanelCollapsed((value) => !value)}
@@ -7742,29 +7740,23 @@ export default function RaceMap() {
                 <button
                   type="button"
                   onClick={handleResetDrawRoute}
-                  disabled={isGeneratingDrawRouteCandidates}
-                  className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700"
                 >
                   다시 그리기
                 </button>
 
-                <button
-                  type="button"
-                  onClick={handleGenerateDrawnRouteCandidates}
-                  disabled={!canGenerateDrawnRouteCandidates}
-                  className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
-                >
-                  {isGeneratingDrawRouteCandidates ? "후보 찾는 중..." : "후보 찾기"}
-                </button>
-
-                {isGeneratingDrawRouteCandidates && (
+                {isGeneratingDrawRouteCandidates ? (
                   <button
                     type="button"
                     onClick={handleStopCourseSearch}
-                    className="course-search-stop-button col-span-2 px-3 py-2 text-xs font-black"
+                    className="course-search-stop-button px-3 py-2 text-xs font-black"
                   >
-                    코스 탐색 중지
+                    탐색 중지
                   </button>
+                ) : (
+                  <div className="rounded-lg bg-white/55 px-3 py-2 text-center text-xs font-bold text-slate-500">
+                    그리기 완료 시 자동 탐색
+                  </div>
                 )}
               </div>
             </div>
