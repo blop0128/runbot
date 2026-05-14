@@ -101,71 +101,6 @@ type ElevationSummary =
       samples: number;
     };
 
-type RouteQualityDataStatus =
-  | "shape-only"
-  | "road-data-loading"
-  | "road-data-ready"
-  | "road-data-partial"
-  | "road-data-error";
-
-type RouteQualityScore = {
-  totalScore: number;
-  practicalScore: number;
-  trafficSignalCount: number | null;
-  majorRoadRatio: number | null;
-  pedestrianPathRatio: number | null;
-  roadClassScore: number | null;
-  sharpTurnPenaltyM: number;
-  zigzagPenaltyM: number;
-  repeatedSegmentPenaltyM: number;
-  shortSegmentPenaltyM: number;
-  distanceErrorPenaltyM: number;
-  tolerancePenaltyM: number;
-  smoothnessPenaltyM: number;
-  futureDataStatus: RouteQualityDataStatus;
-};
-
-type ExternalRouteDataStatus =
-  | "idle"
-  | "loading"
-  | "ready"
-  | "partial"
-  | "unavailable"
-  | "error";
-
-type TrafficSignalDataStatus =
-  | "pending"
-  | "loading"
-  | "ready"
-  | "unavailable"
-  | "error";
-
-type RouteExternalQualityData = {
-  trafficSignalCount: number | null;
-  trafficSignalStatus: TrafficSignalDataStatus;
-  majorRoadRatio: number | null;
-  pedestrianPathRatio: number | null;
-  roadClassScore: number | null;
-  roadClassStatus: ExternalRouteDataStatus;
-  updatedAt: number;
-};
-
-type TrafficSignalNode = {
-  id: string;
-  point: LngLat;
-};
-
-type OverpassElement = {
-  type?: string;
-  id?: number | string;
-  lat?: number;
-  lon?: number;
-};
-
-type OverpassResponse = {
-  elements?: OverpassElement[];
-};
-
 type TerrainQueryableMap = mapboxgl.Map & {
   setTerrain?: (terrain: { source: string; exaggeration?: number } | null) => void;
   queryTerrainElevation?: (
@@ -201,35 +136,6 @@ const DIRECTIONS_PROFILE = "mapbox/walking";
 const FEEDBACK_FORM_URL = "";
 const TEST_PANEL_QUERY_PARAM = "devtools";
 const COURSE_SEARCH_ABORT_MESSAGE = "COURSE_SEARCH_ABORTED";
-const TRAFFIC_SIGNAL_RADIUS_M = 35;
-const ROUTE_ROAD_SAMPLE_SPACING_M = 85;
-const ROUTE_ROAD_QUERY_PIXEL_RADIUS = 9;
-const OVERPASS_API_ENDPOINTS = [
-  "https://overpass-api.de/api/interpreter",
-  "https://overpass.kumi.systems/api/interpreter",
-];
-const MAJOR_ROAD_CLASSES = new Set([
-  "motorway",
-  "trunk",
-  "primary",
-  "secondary",
-  "tertiary",
-  "motorway_link",
-  "trunk_link",
-  "primary_link",
-  "secondary_link",
-  "tertiary_link",
-]);
-const PEDESTRIAN_FRIENDLY_ROAD_CLASSES = new Set([
-  "path",
-  "footway",
-  "pedestrian",
-  "steps",
-  "cycleway",
-  "track",
-  "living_street",
-  "service",
-]);
 
 const DEFAULT_CENTER: LngLat = [126.9205, 37.5297];
 
@@ -1411,10 +1317,6 @@ function angleDeltaDeg(a: number, b: number): number {
   return Math.abs((((b - a + 540) % 360) + 360) % 360 - 180);
 }
 
-function signedAngleDeltaDeg(a: number, b: number): number {
-  return (((b - a + 540) % 360) + 360) % 360 - 180;
-}
-
 function calculateSharpTurnPenaltyM(routePolyline: LngLat[]): number {
   const routeLengthM = getPolylineLengthM(routePolyline);
   const routeSamples = samplePolylineEvenly(
@@ -2443,596 +2345,6 @@ function getCandidateModeLabel(mode: CandidateMode): string {
   return mode === "oneWay" ? "편도" : "왕복";
 }
 
-function calculateZigzagPenaltyM(routePolyline: LngLat[]): number {
-  const routeLengthM = getPolylineLengthM(routePolyline);
-
-  if (routeLengthM < 90) return 0;
-
-  const routeSamples = samplePolylineEvenly(
-    routePolyline,
-    clampNumber(Math.ceil(routeLengthM / 20) + 1, 10, 180)
-  );
-
-  if (routeSamples.length < 6) return 0;
-
-  type TurnEvent = {
-    distanceM: number;
-    signedTurnDeg: number;
-    absTurnDeg: number;
-  };
-
-  const bearings: Array<{ bearing: number; distanceM: number }> = [];
-  let cumulativeDistanceM = 0;
-
-  for (let index = 1; index < routeSamples.length; index += 1) {
-    const previous = routeSamples[index - 1];
-    const current = routeSamples[index];
-    const segmentLengthM = haversineDistanceM(previous, current);
-
-    if (segmentLengthM < 8) continue;
-
-    cumulativeDistanceM += segmentLengthM;
-    bearings.push({
-      bearing: bearingBetweenPointsDeg(previous, current),
-      distanceM: cumulativeDistanceM,
-    });
-  }
-
-  if (bearings.length < 5) return 0;
-
-  const turnEvents: TurnEvent[] = [];
-  const minZigzagTurnDeg = 45;
-
-  for (let index = 1; index < bearings.length; index += 1) {
-    const signedTurnDeg = signedAngleDeltaDeg(
-      bearings[index - 1].bearing,
-      bearings[index].bearing
-    );
-    const absTurnDeg = Math.abs(signedTurnDeg);
-
-    if (absTurnDeg < minZigzagTurnDeg) continue;
-
-    turnEvents.push({
-      distanceM: bearings[index].distanceM,
-      signedTurnDeg,
-      absTurnDeg,
-    });
-  }
-
-  if (turnEvents.length < 4) return 0;
-
-  // A smooth loop often keeps turning in the same direction. Treat it as zigzag
-  // only when sharp left/right changes repeat in a short distance window.
-  const zigzagWindowM = 120;
-  const minAlternatingTurnsInWindow = 3;
-  let penaltyM = 0;
-  let index = 0;
-
-  while (index < turnEvents.length) {
-    const windowStart = turnEvents[index].distanceM;
-    const windowEvents = turnEvents.filter((event) => {
-      return event.distanceM >= windowStart && event.distanceM <= windowStart + zigzagWindowM;
-    });
-
-    if (windowEvents.length < minAlternatingTurnsInWindow + 1) {
-      index += 1;
-      continue;
-    }
-
-    let alternatingCount = 0;
-    let turnMagnitudeSum = 0;
-
-    for (let eventIndex = 1; eventIndex < windowEvents.length; eventIndex += 1) {
-      const previous = windowEvents[eventIndex - 1];
-      const current = windowEvents[eventIndex];
-      const isAlternating = Math.sign(previous.signedTurnDeg) !== Math.sign(current.signedTurnDeg);
-
-      if (!isAlternating) continue;
-
-      alternatingCount += 1;
-      turnMagnitudeSum += Math.min(previous.absTurnDeg + current.absTurnDeg, 210);
-    }
-
-    if (alternatingCount >= minAlternatingTurnsInWindow) {
-      const windowPenalty =
-        190 +
-        alternatingCount * 85 +
-        Math.min(turnMagnitudeSum * 0.34, 360);
-      penaltyM += windowPenalty;
-
-      const skipUntilDistanceM = windowStart + zigzagWindowM * 0.72;
-      while (
-        index < turnEvents.length &&
-        turnEvents[index].distanceM <= skipUntilDistanceM
-      ) {
-        index += 1;
-      }
-      continue;
-    }
-
-    index += 1;
-  }
-
-  return penaltyM;
-}
-
-function calculateShortSegmentPenaltyM(routePolyline: LngLat[]): number {
-  if (routePolyline.length < 3) return 0;
-
-  let shortSegmentCount = 0;
-  let veryShortSegmentCount = 0;
-  let shortSegmentDistanceM = 0;
-
-  for (let index = 1; index < routePolyline.length; index += 1) {
-    const segmentLengthM = haversineDistanceM(
-      routePolyline[index - 1],
-      routePolyline[index]
-    );
-
-    if (segmentLengthM < 8) continue;
-
-    if (segmentLengthM < 22) {
-      shortSegmentCount += 1;
-      shortSegmentDistanceM += 22 - segmentLengthM;
-    }
-
-    if (segmentLengthM < 12) {
-      veryShortSegmentCount += 1;
-    }
-  }
-
-  return shortSegmentCount * 8 + veryShortSegmentCount * 16 + shortSegmentDistanceM * 0.55;
-}
-
-
-function normalizeTrafficSignalStatus(
-  status?: ExternalRouteDataStatus | TrafficSignalDataStatus
-): TrafficSignalDataStatus {
-  if (
-    status === "loading" ||
-    status === "ready" ||
-    status === "unavailable" ||
-    status === "error"
-  ) {
-    return status;
-  }
-
-  return "pending";
-}
-
-function getEmptyExternalRouteQualityData(
-  status: ExternalRouteDataStatus = "loading"
-): RouteExternalQualityData {
-  return {
-    trafficSignalCount: null,
-    trafficSignalStatus: normalizeTrafficSignalStatus(status),
-    majorRoadRatio: null,
-    pedestrianPathRatio: null,
-    roadClassScore: null,
-    roadClassStatus: status,
-    updatedAt: Date.now(),
-  };
-}
-
-function getRouteQualityDataStatus(
-  externalData?: RouteExternalQualityData
-): RouteQualityDataStatus {
-  if (!externalData) return "shape-only";
-
-  const statuses = [
-    externalData.trafficSignalStatus,
-    externalData.roadClassStatus,
-  ];
-
-  if (statuses.some((status) => status === "loading")) {
-    return "road-data-loading";
-  }
-
-  if (statuses.every((status) => status === "ready")) {
-    return "road-data-ready";
-  }
-
-  if (statuses.some((status) => status === "ready")) {
-    return "road-data-partial";
-  }
-
-  if (statuses.some((status) => status === "error")) {
-    return "road-data-error";
-  }
-
-  return "shape-only";
-}
-
-function calculateRouteBbox(
-  polylines: LngLat[][],
-  paddingM = 80
-): { south: number; west: number; north: number; east: number } | null {
-  const points = polylines.flat();
-  if (points.length === 0) return null;
-
-  const lngValues = points.map((point) => point[0]);
-  const latValues = points.map((point) => point[1]);
-  const southRaw = Math.min(...latValues);
-  const northRaw = Math.max(...latValues);
-  const westRaw = Math.min(...lngValues);
-  const eastRaw = Math.max(...lngValues);
-  const midLat = (southRaw + northRaw) / 2;
-  const latPadding = paddingM / 111_320;
-  const lngPadding = paddingM / Math.max(111_320 * Math.cos(toRadians(midLat)), 1);
-
-  return {
-    south: southRaw - latPadding,
-    west: westRaw - lngPadding,
-    north: northRaw + latPadding,
-    east: eastRaw + lngPadding,
-  };
-}
-
-function getRouteDistanceToPointM(polyline: LngLat[], point: LngLat): number {
-  if (polyline.length === 0) return Number.POSITIVE_INFINITY;
-  if (polyline.length === 1) return haversineDistanceM(polyline[0], point);
-
-  const origin = point;
-  const localPoint = toLocalMeters(point, origin);
-  let minDistanceM = Number.POSITIVE_INFINITY;
-
-  for (let index = 1; index < polyline.length; index += 1) {
-    const a = toLocalMeters(polyline[index - 1], origin);
-    const b = toLocalMeters(polyline[index], origin);
-    const abX = b.x - a.x;
-    const abY = b.y - a.y;
-    const apX = localPoint.x - a.x;
-    const apY = localPoint.y - a.y;
-    const abLengthSq = abX * abX + abY * abY;
-    const t = abLengthSq <= 0 ? 0 : clampNumber((apX * abX + apY * abY) / abLengthSq, 0, 1);
-    const projectedX = a.x + abX * t;
-    const projectedY = a.y + abY * t;
-    const dx = localPoint.x - projectedX;
-    const dy = localPoint.y - projectedY;
-    minDistanceM = Math.min(minDistanceM, Math.sqrt(dx * dx + dy * dy));
-  }
-
-  return minDistanceM;
-}
-
-function countTrafficSignalsNearRoute(
-  polyline: LngLat[],
-  signalNodes: TrafficSignalNode[],
-  radiusM = TRAFFIC_SIGNAL_RADIUS_M
-): number {
-  const matched = new Set<string>();
-
-  signalNodes.forEach((node) => {
-    if (getRouteDistanceToPointM(polyline, node.point) <= radiusM) {
-      matched.add(node.id);
-    }
-  });
-
-  return matched.size;
-}
-
-async function fetchTrafficSignalsInBbox(
-  bbox: { south: number; west: number; north: number; east: number },
-  signal?: AbortSignal
-): Promise<TrafficSignalNode[]> {
-  const query = `[out:json][timeout:12];node["highway"="traffic_signals"](${bbox.south.toFixed(6)},${bbox.west.toFixed(6)},${bbox.north.toFixed(6)},${bbox.east.toFixed(6)});out body;`;
-  let lastError: unknown = null;
-
-  for (const endpoint of OVERPASS_API_ENDPOINTS) {
-    try {
-      const url = `${endpoint}?data=${encodeURIComponent(query)}`;
-      const response = await fetch(url, {
-        method: "GET",
-        signal,
-        headers: {
-          Accept: "application/json",
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Overpass request failed: ${response.status}`);
-      }
-
-      const data = (await response.json()) as OverpassResponse;
-      const elements = Array.isArray(data.elements) ? data.elements : [];
-
-      return elements
-        .filter((element) => {
-          return (
-            typeof element.lat === "number" &&
-            typeof element.lon === "number" &&
-            Number.isFinite(element.lat) &&
-            Number.isFinite(element.lon)
-          );
-        })
-        .map((element, index) => ({
-          id: `${element.type ?? "node"}-${element.id ?? index}`,
-          point: [element.lon as number, element.lat as number] as LngLat,
-        }));
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      lastError = error;
-    }
-  }
-
-  throw lastError instanceof Error
-    ? lastError
-    : new Error("Overpass traffic signal request failed.");
-}
-
-function getRoadClassFromFeature(feature: unknown): string | null {
-  const properties =
-    typeof feature === "object" && feature !== null && "properties" in feature
-      ? (feature as { properties?: Record<string, unknown> }).properties
-      : null;
-
-  if (!properties) return null;
-
-  const classLike = properties.class ?? properties.type ?? properties.highway;
-  if (typeof classLike !== "string") return null;
-  return classLike.toLowerCase();
-}
-
-function isRoadLayerId(layerId: string): boolean {
-  const lower = layerId.toLowerCase();
-  return (
-    lower.includes("road") ||
-    lower.includes("street") ||
-    lower.includes("path") ||
-    lower.includes("pedestrian") ||
-    lower.includes("bridge") ||
-    lower.includes("tunnel")
-  );
-}
-
-function getVisibleRoadLayerIds(map: mapboxgl.Map): string[] {
-  const layers = map.getStyle().layers ?? [];
-
-  return layers
-    .filter((layer) => layer.type === "line" && isRoadLayerId(layer.id))
-    .map((layer) => layer.id);
-}
-
-function queryRoadClassMetricsForRoute(
-  map: mapboxgl.Map | null,
-  polyline: LngLat[]
-): Pick<
-  RouteExternalQualityData,
-  "majorRoadRatio" | "pedestrianPathRatio" | "roadClassScore" | "roadClassStatus"
-> {
-  if (!map || polyline.length < 2) {
-    return {
-      majorRoadRatio: null,
-      pedestrianPathRatio: null,
-      roadClassScore: null,
-      roadClassStatus: "unavailable",
-    };
-  }
-
-  const layerIds = getVisibleRoadLayerIds(map);
-  if (layerIds.length === 0) {
-    return {
-      majorRoadRatio: null,
-      pedestrianPathRatio: null,
-      roadClassScore: null,
-      roadClassStatus: "unavailable",
-    };
-  }
-
-  const routeLengthM = getPolylineLengthM(polyline);
-  const samples = samplePolylineEvenly(
-    polyline,
-    clampNumber(Math.ceil(routeLengthM / ROUTE_ROAD_SAMPLE_SPACING_M) + 1, 10, 80)
-  );
-
-  let matchedSamples = 0;
-  let majorSamples = 0;
-  let pedestrianSamples = 0;
-
-  samples.forEach((point) => {
-    const projected = map.project(point);
-    const queryBox = [
-      [projected.x - ROUTE_ROAD_QUERY_PIXEL_RADIUS, projected.y - ROUTE_ROAD_QUERY_PIXEL_RADIUS],
-      [projected.x + ROUTE_ROAD_QUERY_PIXEL_RADIUS, projected.y + ROUTE_ROAD_QUERY_PIXEL_RADIUS],
-    ] as [[number, number], [number, number]];
-    const features = map.queryRenderedFeatures(queryBox, { layers: layerIds });
-
-    const classes = features
-      .map(getRoadClassFromFeature)
-      .filter((value): value is string => Boolean(value));
-
-    if (classes.length === 0) return;
-
-    matchedSamples += 1;
-
-    if (classes.some((roadClass) => MAJOR_ROAD_CLASSES.has(roadClass))) {
-      majorSamples += 1;
-    }
-
-    if (classes.some((roadClass) => PEDESTRIAN_FRIENDLY_ROAD_CLASSES.has(roadClass))) {
-      pedestrianSamples += 1;
-    }
-  });
-
-  if (matchedSamples < 4) {
-    return {
-      majorRoadRatio: null,
-      pedestrianPathRatio: null,
-      roadClassScore: null,
-      roadClassStatus: "unavailable",
-    };
-  }
-
-  const majorRoadRatio = majorSamples / matchedSamples;
-  const pedestrianPathRatio = pedestrianSamples / matchedSamples;
-  const continuityReward = Math.min(majorRoadRatio * 0.55 + pedestrianPathRatio * 0.65, 0.72);
-  const roadClassScore = Math.max(0, 230 - continuityReward * 300);
-
-  return {
-    majorRoadRatio,
-    pedestrianPathRatio,
-    roadClassScore,
-    roadClassStatus: "ready",
-  };
-}
-
-function mergeExternalRouteQualityData(
-  base: RouteExternalQualityData | undefined,
-  update: Partial<RouteExternalQualityData>
-): RouteExternalQualityData {
-  return {
-    ...(base ?? getEmptyExternalRouteQualityData("idle")),
-    ...update,
-    updatedAt: Date.now(),
-  };
-}
-
-function calculateRouteQualityScore(
-  candidate: AutoLoopCourseCandidate,
-  externalData?: RouteExternalQualityData
-): RouteQualityScore {
-  const sharpTurnPenaltyM = calculateSharpTurnPenaltyM(candidate.polyline);
-  const zigzagPenaltyM = calculateZigzagPenaltyM(candidate.polyline);
-  const repeatedSegmentPenaltyM = calculateRepeatedPathPenaltyM(candidate.polyline);
-  const shortSegmentPenaltyM = calculateShortSegmentPenaltyM(candidate.polyline);
-  const tolerancePenaltyM = candidate.isWithinTolerance ? 0 : 850;
-  const distanceErrorPenaltyM = candidate.distanceErrorM * 0.22;
-  const readyTrafficSignalCount =
-    externalData?.trafficSignalStatus === "ready" &&
-    typeof externalData.trafficSignalCount === "number"
-      ? externalData.trafficSignalCount
-      : null;
-  const trafficSignalPenaltyM = readyTrafficSignalCount !== null
-    ? readyTrafficSignalCount * 185
-    : 0;
-  const roadClassPenaltyM =
-    typeof externalData?.roadClassScore === "number"
-      ? externalData.roadClassScore
-      : 0;
-  const smoothnessPenaltyM =
-    sharpTurnPenaltyM * 1.18 +
-    zigzagPenaltyM * 1.10 +
-    shortSegmentPenaltyM * 0.86;
-  const practicalScore =
-    sharpTurnPenaltyM * 1.38 +
-    zigzagPenaltyM * 1.30 +
-    repeatedSegmentPenaltyM * 1.05 +
-    shortSegmentPenaltyM * 0.90 +
-    candidate.distanceErrorM * 0.12 +
-    trafficSignalPenaltyM +
-    roadClassPenaltyM +
-    tolerancePenaltyM;
-  const totalScore =
-    smoothnessPenaltyM +
-    repeatedSegmentPenaltyM * 0.95 +
-    distanceErrorPenaltyM +
-    trafficSignalPenaltyM * 0.82 +
-    roadClassPenaltyM * 0.80 +
-    tolerancePenaltyM;
-
-  return {
-    totalScore,
-    practicalScore,
-    trafficSignalCount: externalData?.trafficSignalCount ?? null,
-    majorRoadRatio: externalData?.majorRoadRatio ?? null,
-    pedestrianPathRatio: externalData?.pedestrianPathRatio ?? null,
-    roadClassScore: externalData?.roadClassScore ?? null,
-    sharpTurnPenaltyM,
-    zigzagPenaltyM,
-    repeatedSegmentPenaltyM,
-    shortSegmentPenaltyM,
-    distanceErrorPenaltyM,
-    tolerancePenaltyM,
-    smoothnessPenaltyM,
-    futureDataStatus: getRouteQualityDataStatus(externalData),
-  };
-}
-
-function getRouteQualityGrade(score: RouteQualityScore): string {
-  if (score.practicalScore < 260) return "좋음";
-  if (score.practicalScore < 620) return "보통";
-  return "주의";
-}
-
-function formatRatioPercent(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return "-";
-  return `${Math.round(value * 100)}%`;
-}
-
-function getTrafficSignalQualityChip(
-  score: RouteQualityScore,
-  externalData?: RouteExternalQualityData
-): string {
-  const status = normalizeTrafficSignalStatus(externalData?.trafficSignalStatus);
-
-  if (status === "ready") {
-    return `신호등 ${score.trafficSignalCount ?? 0}개`;
-  }
-
-  if (status === "error" || status === "unavailable") {
-    return "신호등 확인 불가";
-  }
-
-  return "신호등 확인 중";
-}
-
-function getTrafficSignalRankingPendingPenalty(
-  externalData?: RouteExternalQualityData
-): number {
-  const status = normalizeTrafficSignalStatus(externalData?.trafficSignalStatus);
-
-  if (status === "loading" || status === "pending") {
-    return 24;
-  }
-
-  return 0;
-}
-
-function getRouteQualitySummary(
-  candidate: AutoLoopCourseCandidate,
-  externalData?: RouteExternalQualityData
-): string {
-  const score = calculateRouteQualityScore(candidate, externalData);
-  const chips: string[] = [];
-
-  chips.push(`실전성 ${getRouteQualityGrade(score)}`);
-  chips.push(getTrafficSignalQualityChip(score, externalData));
-
-  if (externalData?.roadClassStatus === "ready") {
-    chips.push(`큰길 ${formatRatioPercent(score.majorRoadRatio)}`);
-
-    if ((score.pedestrianPathRatio ?? 0) > 0) {
-      chips.push(`보행축 ${formatRatioPercent(score.pedestrianPathRatio)}`);
-    }
-  } else if (externalData?.roadClassStatus === "loading") {
-    chips.push("도로등급 확인 중");
-  }
-
-  if (score.sharpTurnPenaltyM < 130) {
-    chips.push("급회전 적음");
-  } else if (score.sharpTurnPenaltyM >= 360) {
-    chips.push("급회전 많음");
-  }
-
-  if (score.zigzagPenaltyM < 160) {
-    chips.push("지그재그 적음");
-  } else if (score.zigzagPenaltyM >= 420) {
-    chips.push("지그재그 주의");
-  }
-
-  if (score.repeatedSegmentPenaltyM < 140) {
-    chips.push("반복 적음");
-  } else if (score.repeatedSegmentPenaltyM >= 360) {
-    chips.push("반복 구간 주의");
-  }
-
-  if (candidate.distanceErrorM < 180) {
-    chips.push("거리 정확");
-  }
-
-  return chips.slice(0, 6).join(" · ");
-}
-
 function getCandidateRecommendationLabel(
   candidate: AutoLoopCourseCandidate,
   index: number
@@ -3041,91 +2353,60 @@ function getCandidateRecommendationLabel(
   const isDrawnCandidate = /그리기|원형|루프/.test(candidate.name);
 
   if (isCustomCandidate) {
-    return ["종합 추천", "실전 코스 후보", "거리 균형 후보"][index] ?? "대안 후보";
+    return ["기본 후보", "실전 코스 후보", "거리 균형 후보"][index] ?? "대안 후보";
   }
 
   if (isDrawnCandidate) {
-    return ["종합 추천", "실전 코스 후보", "거리 정확 후보"][index] ?? "대안 후보";
+    return ["그림 유사 후보", "실전 코스 후보", "거리 정확 후보"][index] ?? "대안 후보";
   }
 
-  return ["종합 추천", "실전 코스형", "거리 정확형"][index] ?? "대안 후보";
+  return ["균형 추천", "실전 코스형", "거리 정확형"][index] ?? "대안 후보";
 }
 
-function getPracticalCandidateScore(
-  candidate: AutoLoopCourseCandidate,
-  externalData?: RouteExternalQualityData
-): number {
-  return calculateRouteQualityScore(candidate, externalData).practicalScore;
-}
-
-function getOverallRecommendedCandidateScore(
-  candidate: AutoLoopCourseCandidate,
-  originalIndex: number,
-  externalData?: RouteExternalQualityData
-): number {
-  const quality = calculateRouteQualityScore(candidate, externalData);
-  const unresolvedRoadDataPenalty = getTrafficSignalRankingPendingPenalty(externalData);
+function getPracticalCandidateScore(candidate: AutoLoopCourseCandidate): number {
+  const sharpTurnPenaltyM = calculateSharpTurnPenaltyM(candidate.polyline);
+  const repeatedPathPenaltyM = calculateRepeatedPathPenaltyM(candidate.polyline);
+  const tolerancePenaltyM = candidate.isWithinTolerance ? 0 : 850;
 
   return (
-    quality.totalScore * 1.08 +
-    quality.practicalScore * 0.72 +
-    candidate.distanceErrorM * 0.18 +
-    unresolvedRoadDataPenalty +
-    originalIndex * 24
+    sharpTurnPenaltyM * 1.3 +
+    repeatedPathPenaltyM * 0.9 +
+    candidate.distanceErrorM * 0.22 +
+    tolerancePenaltyM
   );
 }
 
 function selectRecommendedCandidates(
-  candidates: AutoLoopCourseCandidate[],
-  externalDataByCandidateId?: Record<string, RouteExternalQualityData>
+  candidates: AutoLoopCourseCandidate[]
 ): AutoLoopCourseCandidate[] {
-  if (candidates.length === 0) return [];
+  if (candidates.length <= AUTO_LOOP_PAGE_SIZE) {
+    return candidates;
+  }
 
   const selected: AutoLoopCourseCandidate[] = [];
-  const scoredCandidates = candidates.map((candidate, index) => {
-    const externalData = externalDataByCandidateId?.[candidate.candidateId];
-
-    return {
-      candidate,
-      index,
-      externalData,
-      quality: calculateRouteQualityScore(candidate, externalData),
-    };
-  });
-
   const pushDistinct = (candidate: AutoLoopCourseCandidate | undefined) => {
     if (!candidate) return;
     if (selected.some((item) => item.candidateId === candidate.candidateId)) return;
     selected.push(candidate);
   };
 
+  pushDistinct(candidates[0]);
+
   pushDistinct(
-    [...scoredCandidates]
-      .sort((a, b) => {
-        return (
-          getOverallRecommendedCandidateScore(a.candidate, a.index, a.externalData) -
-          getOverallRecommendedCandidateScore(b.candidate, b.index, b.externalData)
-        );
-      })[0]?.candidate
+    [...candidates]
+      .filter((candidate) => !selected.some((item) => item.candidateId === candidate.candidateId))
+      .sort((a, b) => getPracticalCandidateScore(a) - getPracticalCandidateScore(b))[0]
   );
 
   pushDistinct(
-    [...scoredCandidates]
-      .filter((item) => !selected.some((selectedItem) => selectedItem.candidateId === item.candidate.candidateId))
-      .sort((a, b) => a.quality.practicalScore - b.quality.practicalScore)[0]
-      ?.candidate
+    [...candidates]
+      .filter((candidate) => !selected.some((item) => item.candidateId === candidate.candidateId))
+      .sort((a, b) => a.distanceErrorM - b.distanceErrorM)[0]
   );
 
-  pushDistinct(
-    [...scoredCandidates]
-      .filter((item) => !selected.some((selectedItem) => selectedItem.candidateId === item.candidate.candidateId))
-      .sort((a, b) => a.candidate.distanceErrorM - b.candidate.distanceErrorM)[0]
-      ?.candidate
-  );
-
-  for (const item of scoredCandidates) {
+  for (const candidate of candidates) {
     if (selected.length >= AUTO_LOOP_PAGE_SIZE) break;
-    pushDistinct(item.candidate);
+    pushDistinct(candidate);
   }
 
   return selected.slice(0, AUTO_LOOP_PAGE_SIZE);
@@ -4040,8 +3321,6 @@ export default function RaceMap() {
   const [autoLoopElevationSummaries, setAutoLoopElevationSummaries] = useState<
     Record<string, ElevationSummary>
   >({});
-  const [routeQualityDataByCandidateId, setRouteQualityDataByCandidateId] =
-    useState<Record<string, RouteExternalQualityData>>({});
   const [autoLoopError, setAutoLoopError] = useState<string | null>(null);
 
   const [isRunning, setIsRunning] = useState(false);
@@ -4126,194 +3405,6 @@ export default function RaceMap() {
       ) ?? null
     );
   }, [autoLoopCandidates, autoLoopPreviewCandidateId]);
-
-  const isRouteQualityDataResolvedForVisibleCandidates = useMemo(() => {
-    if (autoLoopCandidates.length === 0) return false;
-
-    return autoLoopCandidates.every((candidate) => {
-      const data = routeQualityDataByCandidateId[candidate.candidateId];
-      return (
-        data?.trafficSignalStatus === "ready" ||
-        data?.trafficSignalStatus === "error" ||
-        data?.trafficSignalStatus === "unavailable"
-      );
-    });
-  }, [autoLoopCandidates, routeQualityDataByCandidateId]);
-
-  useEffect(() => {
-    if (!isMapLoaded || autoLoopCandidates.length === 0) return;
-
-    const controller = new AbortController();
-    const candidates = autoLoopCandidates;
-    const candidateIds = new Set(candidates.map((candidate) => candidate.candidateId));
-
-    setRouteQualityDataByCandidateId((current) => {
-      const next: Record<string, RouteExternalQualityData> = {};
-
-      candidates.forEach((candidate) => {
-        next[candidate.candidateId] = mergeExternalRouteQualityData(
-          current[candidate.candidateId],
-          {
-            trafficSignalStatus:
-              current[candidate.candidateId]?.trafficSignalStatus === "ready"
-                ? "ready"
-                : "loading",
-            roadClassStatus:
-              current[candidate.candidateId]?.roadClassStatus === "ready"
-                ? "ready"
-                : "loading",
-          }
-        );
-      });
-
-      return next;
-    });
-
-    const roadDataById: Record<string, Partial<RouteExternalQualityData>> = {};
-
-    candidates.forEach((candidate) => {
-      const roadMetrics = queryRoadClassMetricsForRoute(
-        mapRef.current,
-        candidate.polyline
-      );
-
-      roadDataById[candidate.candidateId] = {
-        ...roadMetrics,
-      };
-    });
-
-    setRouteQualityDataByCandidateId((current) => {
-      const next = { ...current };
-
-      candidates.forEach((candidate) => {
-        next[candidate.candidateId] = mergeExternalRouteQualityData(
-          next[candidate.candidateId],
-          roadDataById[candidate.candidateId]
-        );
-      });
-
-      return next;
-    });
-
-    const run = async () => {
-      const bbox = calculateRouteBbox(
-        candidates.map((candidate) => candidate.polyline),
-        90
-      );
-
-      if (!bbox) {
-        setRouteQualityDataByCandidateId((current) => {
-          const next = { ...current };
-
-          candidates.forEach((candidate) => {
-            next[candidate.candidateId] = mergeExternalRouteQualityData(
-              next[candidate.candidateId],
-              {
-                trafficSignalCount: null,
-                trafficSignalStatus: "unavailable",
-              }
-            );
-          });
-
-          return next;
-        });
-        return;
-      }
-
-      try {
-        const signalNodes = await fetchTrafficSignalsInBbox(
-          bbox,
-          controller.signal
-        );
-
-        if (controller.signal.aborted) return;
-
-        setRouteQualityDataByCandidateId((current) => {
-          const next = { ...current };
-
-          candidates.forEach((candidate) => {
-            if (!candidateIds.has(candidate.candidateId)) return;
-
-            const count = countTrafficSignalsNearRoute(
-              candidate.polyline,
-              signalNodes
-            );
-
-            next[candidate.candidateId] = mergeExternalRouteQualityData(
-              next[candidate.candidateId],
-              {
-                trafficSignalCount: count,
-                trafficSignalStatus: "ready",
-              }
-            );
-          });
-
-          return next;
-        });
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        console.warn("Failed to fetch traffic signals around routes:", error);
-
-        setRouteQualityDataByCandidateId((current) => {
-          const next = { ...current };
-
-          candidates.forEach((candidate) => {
-            next[candidate.candidateId] = mergeExternalRouteQualityData(
-              next[candidate.candidateId],
-              {
-                trafficSignalCount: null,
-                trafficSignalStatus: "error",
-              }
-            );
-          });
-
-          return next;
-        });
-      }
-    };
-
-    void run();
-
-    return () => {
-      controller.abort();
-    };
-  }, [autoLoopCandidates, isMapLoaded]);
-
-  useEffect(() => {
-    if (autoLoopCandidates.length <= 1) return;
-    if (!isRouteQualityDataResolvedForVisibleCandidates) return;
-
-    const nextCandidates = selectRecommendedCandidates(
-      autoLoopCandidates,
-      routeQualityDataByCandidateId
-    );
-    const currentOrder = autoLoopCandidates.map((candidate) => candidate.candidateId).join("|");
-    const nextOrder = nextCandidates.map((candidate) => candidate.candidateId).join("|");
-
-    if (currentOrder === nextOrder) return;
-
-    const nextPreviewCandidate =
-      nextCandidates.find(
-        (candidate) => candidate.candidateId === autoLoopPreviewCandidateId
-      ) ?? nextCandidates[0];
-
-    setAutoLoopCandidates(nextCandidates);
-    setAutoLoopPreviewCandidateId(nextPreviewCandidate?.candidateId ?? null);
-
-    if (nextPreviewCandidate) {
-      updateAutoLoopCandidateOverlay(
-        nextCandidates,
-        nextPreviewCandidate.candidateId,
-        candidateMode
-      );
-    }
-  }, [
-    autoLoopCandidates,
-    autoLoopPreviewCandidateId,
-    candidateMode,
-    isRouteQualityDataResolvedForVisibleCandidates,
-    routeQualityDataByCandidateId,
-  ]);
 
   const canBuildCustomCourse =
     Boolean(customPoints.start) &&
@@ -4780,7 +3871,6 @@ export default function RaceMap() {
     setAutoLoopCandidateCursor(0);
     setAutoLoopPreviewCandidateId(null);
     setAutoLoopElevationSummaries({});
-    setRouteQualityDataByCandidateId({});
     setAutoLoopError(null);
     setIsAutoLoopPanelCollapsed(false);
     clearAutoLoopCandidateOverlay();
@@ -8709,8 +7799,8 @@ export default function RaceMap() {
                 <div className="space-y-2">
                   <div className="candidate-sheet-info-card text-xs text-slate-600">
                     {isCustomCandidatePanel
-                      ? "추천 기준: 기본 경로 · 실전성/신호등/도로축 · 거리 균형"
-                      : "추천 기준: 유사도 · 실전성/신호등/도로축 · 거리 정확도"}
+                      ? "추천 기준: 기본 경로 · 실전 코스 · 거리 균형"
+                      : "추천 기준: 1순위 유사도 · 2순위 실전성 · 3순위 거리 정확도"}
                     {autoLoopRemainingCount > 0 && (
                       <span> · 다른 후보 {autoLoopRemainingCount}개</span>
                     )}
@@ -8724,12 +7814,6 @@ export default function RaceMap() {
                     const recommendationLabel = getCandidateRecommendationLabel(
                       candidate,
                       index
-                    );
-                    const routeQualityData =
-                      routeQualityDataByCandidateId[candidate.candidateId];
-                    const routeQualitySummary = getRouteQualitySummary(
-                      candidate,
-                      routeQualityData
                     );
 
                     return (
@@ -8796,10 +7880,6 @@ export default function RaceMap() {
 
                             <div className="mt-1 text-[11px] font-semibold text-slate-700">
                               {formatElevationSummary(summary)}
-                            </div>
-
-                            <div className="mt-1 text-[11px] font-black text-slate-800">
-                              {routeQualitySummary}
                             </div>
 
                             <MiniCoursePolyline
