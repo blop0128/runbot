@@ -2438,45 +2438,115 @@ function getCandidateModeLabel(mode: CandidateMode): string {
 
 function calculateZigzagPenaltyM(routePolyline: LngLat[]): number {
   const routeLengthM = getPolylineLengthM(routePolyline);
+
+  if (routeLengthM < 90) return 0;
+
   const routeSamples = samplePolylineEvenly(
     routePolyline,
-    clampNumber(Math.ceil(routeLengthM / 32) + 1, 8, 140)
+    clampNumber(Math.ceil(routeLengthM / 20) + 1, 10, 180)
   );
 
-  if (routeSamples.length < 5) return 0;
+  if (routeSamples.length < 6) return 0;
 
-  const bearings: number[] = [];
+  type TurnEvent = {
+    distanceM: number;
+    signedTurnDeg: number;
+    absTurnDeg: number;
+  };
+
+  const bearings: Array<{ bearing: number; distanceM: number }> = [];
+  let cumulativeDistanceM = 0;
 
   for (let index = 1; index < routeSamples.length; index += 1) {
     const previous = routeSamples[index - 1];
     const current = routeSamples[index];
+    const segmentLengthM = haversineDistanceM(previous, current);
 
-    if (haversineDistanceM(previous, current) < 9) continue;
-    bearings.push(bearingBetweenPointsDeg(previous, current));
+    if (segmentLengthM < 8) continue;
+
+    cumulativeDistanceM += segmentLengthM;
+    bearings.push({
+      bearing: bearingBetweenPointsDeg(previous, current),
+      distanceM: cumulativeDistanceM,
+    });
   }
 
-  if (bearings.length < 4) return 0;
+  if (bearings.length < 5) return 0;
 
+  const turnEvents: TurnEvent[] = [];
+  const minZigzagTurnDeg = 45;
+
+  for (let index = 1; index < bearings.length; index += 1) {
+    const signedTurnDeg = signedAngleDeltaDeg(
+      bearings[index - 1].bearing,
+      bearings[index].bearing
+    );
+    const absTurnDeg = Math.abs(signedTurnDeg);
+
+    if (absTurnDeg < minZigzagTurnDeg) continue;
+
+    turnEvents.push({
+      distanceM: bearings[index].distanceM,
+      signedTurnDeg,
+      absTurnDeg,
+    });
+  }
+
+  if (turnEvents.length < 4) return 0;
+
+  // A smooth loop often keeps turning in the same direction. Treat it as zigzag
+  // only when sharp left/right changes repeat in a short distance window.
+  const zigzagWindowM = 120;
+  const minAlternatingTurnsInWindow = 3;
   let penaltyM = 0;
-  let alternatingTurnCount = 0;
+  let index = 0;
 
-  for (let index = 2; index < bearings.length; index += 1) {
-    const previousTurn = signedAngleDeltaDeg(bearings[index - 2], bearings[index - 1]);
-    const currentTurn = signedAngleDeltaDeg(bearings[index - 1], bearings[index]);
-    const previousAbs = Math.abs(previousTurn);
-    const currentAbs = Math.abs(currentTurn);
+  while (index < turnEvents.length) {
+    const windowStart = turnEvents[index].distanceM;
+    const windowEvents = turnEvents.filter((event) => {
+      return event.distanceM >= windowStart && event.distanceM <= windowStart + zigzagWindowM;
+    });
 
-    if (previousAbs < 28 || currentAbs < 28) continue;
-
-    const isAlternating = Math.sign(previousTurn) !== Math.sign(currentTurn);
-
-    if (isAlternating) {
-      alternatingTurnCount += 1;
-      penaltyM += Math.min(previousAbs + currentAbs, 190) * 0.70;
+    if (windowEvents.length < minAlternatingTurnsInWindow + 1) {
+      index += 1;
+      continue;
     }
+
+    let alternatingCount = 0;
+    let turnMagnitudeSum = 0;
+
+    for (let eventIndex = 1; eventIndex < windowEvents.length; eventIndex += 1) {
+      const previous = windowEvents[eventIndex - 1];
+      const current = windowEvents[eventIndex];
+      const isAlternating = Math.sign(previous.signedTurnDeg) !== Math.sign(current.signedTurnDeg);
+
+      if (!isAlternating) continue;
+
+      alternatingCount += 1;
+      turnMagnitudeSum += Math.min(previous.absTurnDeg + current.absTurnDeg, 210);
+    }
+
+    if (alternatingCount >= minAlternatingTurnsInWindow) {
+      const windowPenalty =
+        190 +
+        alternatingCount * 85 +
+        Math.min(turnMagnitudeSum * 0.34, 360);
+      penaltyM += windowPenalty;
+
+      const skipUntilDistanceM = windowStart + zigzagWindowM * 0.72;
+      while (
+        index < turnEvents.length &&
+        turnEvents[index].distanceM <= skipUntilDistanceM
+      ) {
+        index += 1;
+      }
+      continue;
+    }
+
+    index += 1;
   }
 
-  return penaltyM + alternatingTurnCount * 34;
+  return penaltyM;
 }
 
 function calculateShortSegmentPenaltyM(routePolyline: LngLat[]): number {
@@ -2807,7 +2877,7 @@ function calculateRouteQualityScore(
   const distanceErrorPenaltyM = candidate.distanceErrorM * 0.22;
   const trafficSignalPenaltyM =
     typeof externalData?.trafficSignalCount === "number"
-      ? externalData.trafficSignalCount * 72
+      ? externalData.trafficSignalCount * 185
       : 0;
   const roadClassPenaltyM =
     typeof externalData?.roadClassScore === "number"
@@ -2896,9 +2966,9 @@ function getRouteQualitySummary(
     chips.push("급회전 많음");
   }
 
-  if (score.zigzagPenaltyM < 130) {
+  if (score.zigzagPenaltyM < 160) {
     chips.push("지그재그 적음");
-  } else if (score.zigzagPenaltyM >= 360) {
+  } else if (score.zigzagPenaltyM >= 420) {
     chips.push("지그재그 주의");
   }
 
@@ -2923,14 +2993,14 @@ function getCandidateRecommendationLabel(
   const isDrawnCandidate = /그리기|원형|루프/.test(candidate.name);
 
   if (isCustomCandidate) {
-    return ["기본 후보", "실전 코스 후보", "거리 균형 후보"][index] ?? "대안 후보";
+    return ["종합 추천", "실전 코스 후보", "거리 균형 후보"][index] ?? "대안 후보";
   }
 
   if (isDrawnCandidate) {
-    return ["그림 유사 후보", "실전 코스 후보", "거리 정확 후보"][index] ?? "대안 후보";
+    return ["종합 추천", "실전 코스 후보", "거리 정확 후보"][index] ?? "대안 후보";
   }
 
-  return ["균형 추천", "실전 코스형", "거리 정확형"][index] ?? "대안 후보";
+  return ["종합 추천", "실전 코스형", "거리 정확형"][index] ?? "대안 후보";
 }
 
 function getPracticalCandidateScore(
@@ -2940,37 +3010,75 @@ function getPracticalCandidateScore(
   return calculateRouteQualityScore(candidate, externalData).practicalScore;
 }
 
+function getOverallRecommendedCandidateScore(
+  candidate: AutoLoopCourseCandidate,
+  originalIndex: number,
+  externalData?: RouteExternalQualityData
+): number {
+  const quality = calculateRouteQualityScore(candidate, externalData);
+  const unresolvedRoadDataPenalty =
+    externalData?.trafficSignalStatus === "ready" ? 0 : 120;
+
+  return (
+    quality.totalScore * 1.08 +
+    quality.practicalScore * 0.72 +
+    candidate.distanceErrorM * 0.18 +
+    unresolvedRoadDataPenalty +
+    originalIndex * 24
+  );
+}
+
 function selectRecommendedCandidates(
-  candidates: AutoLoopCourseCandidate[]
+  candidates: AutoLoopCourseCandidate[],
+  externalDataByCandidateId?: Record<string, RouteExternalQualityData>
 ): AutoLoopCourseCandidate[] {
-  if (candidates.length <= AUTO_LOOP_PAGE_SIZE) {
-    return candidates;
-  }
+  if (candidates.length === 0) return [];
 
   const selected: AutoLoopCourseCandidate[] = [];
+  const scoredCandidates = candidates.map((candidate, index) => {
+    const externalData = externalDataByCandidateId?.[candidate.candidateId];
+
+    return {
+      candidate,
+      index,
+      externalData,
+      quality: calculateRouteQualityScore(candidate, externalData),
+    };
+  });
+
   const pushDistinct = (candidate: AutoLoopCourseCandidate | undefined) => {
     if (!candidate) return;
     if (selected.some((item) => item.candidateId === candidate.candidateId)) return;
     selected.push(candidate);
   };
 
-  pushDistinct(candidates[0]);
-
   pushDistinct(
-    [...candidates]
-      .filter((candidate) => !selected.some((item) => item.candidateId === candidate.candidateId))
-      .sort((a, b) => getPracticalCandidateScore(a) - getPracticalCandidateScore(b))[0]
+    [...scoredCandidates]
+      .sort((a, b) => {
+        return (
+          getOverallRecommendedCandidateScore(a.candidate, a.index, a.externalData) -
+          getOverallRecommendedCandidateScore(b.candidate, b.index, b.externalData)
+        );
+      })[0]?.candidate
   );
 
   pushDistinct(
-    [...candidates]
-      .filter((candidate) => !selected.some((item) => item.candidateId === candidate.candidateId))
-      .sort((a, b) => a.distanceErrorM - b.distanceErrorM)[0]
+    [...scoredCandidates]
+      .filter((item) => !selected.some((selectedItem) => selectedItem.candidateId === item.candidate.candidateId))
+      .sort((a, b) => a.quality.practicalScore - b.quality.practicalScore)[0]
+      ?.candidate
   );
 
-  for (const candidate of candidates) {
+  pushDistinct(
+    [...scoredCandidates]
+      .filter((item) => !selected.some((selectedItem) => selectedItem.candidateId === item.candidate.candidateId))
+      .sort((a, b) => a.candidate.distanceErrorM - b.candidate.distanceErrorM)[0]
+      ?.candidate
+  );
+
+  for (const item of scoredCandidates) {
     if (selected.length >= AUTO_LOOP_PAGE_SIZE) break;
-    pushDistinct(candidate);
+    pushDistinct(item.candidate);
   }
 
   return selected.slice(0, AUTO_LOOP_PAGE_SIZE);
@@ -3972,6 +4080,19 @@ export default function RaceMap() {
     );
   }, [autoLoopCandidates, autoLoopPreviewCandidateId]);
 
+  const isRouteQualityDataResolvedForVisibleCandidates = useMemo(() => {
+    if (autoLoopCandidates.length === 0) return false;
+
+    return autoLoopCandidates.every((candidate) => {
+      const data = routeQualityDataByCandidateId[candidate.candidateId];
+      return (
+        data?.trafficSignalStatus === "ready" ||
+        data?.trafficSignalStatus === "error" ||
+        data?.trafficSignalStatus === "unavailable"
+      );
+    });
+  }, [autoLoopCandidates, routeQualityDataByCandidateId]);
+
   useEffect(() => {
     if (!isMapLoaded || autoLoopCandidates.length === 0) return;
 
@@ -4093,6 +4214,42 @@ export default function RaceMap() {
       controller.abort();
     };
   }, [autoLoopCandidates, isMapLoaded]);
+
+  useEffect(() => {
+    if (autoLoopCandidates.length <= 1) return;
+    if (!isRouteQualityDataResolvedForVisibleCandidates) return;
+
+    const nextCandidates = selectRecommendedCandidates(
+      autoLoopCandidates,
+      routeQualityDataByCandidateId
+    );
+    const currentOrder = autoLoopCandidates.map((candidate) => candidate.candidateId).join("|");
+    const nextOrder = nextCandidates.map((candidate) => candidate.candidateId).join("|");
+
+    if (currentOrder === nextOrder) return;
+
+    const nextPreviewCandidate =
+      nextCandidates.find(
+        (candidate) => candidate.candidateId === autoLoopPreviewCandidateId
+      ) ?? nextCandidates[0];
+
+    setAutoLoopCandidates(nextCandidates);
+    setAutoLoopPreviewCandidateId(nextPreviewCandidate?.candidateId ?? null);
+
+    if (nextPreviewCandidate) {
+      updateAutoLoopCandidateOverlay(
+        nextCandidates,
+        nextPreviewCandidate.candidateId,
+        candidateMode
+      );
+    }
+  }, [
+    autoLoopCandidates,
+    autoLoopPreviewCandidateId,
+    candidateMode,
+    isRouteQualityDataResolvedForVisibleCandidates,
+    routeQualityDataByCandidateId,
+  ]);
 
   const canBuildCustomCourse =
     Boolean(customPoints.start) &&
