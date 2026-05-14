@@ -4975,6 +4975,24 @@ export default function RaceMap() {
     setStatus("그린 선을 초기화했습니다. 다시 지도 위에 그려주세요.");
   }
 
+  function handleRestartDrawRouteAfterSearch() {
+    if (isGeneratingAnyCourse) {
+      handleStopCourseSearch();
+    }
+
+    clearAutoLoopCandidates();
+    clearDrawRoutePointerSession();
+    clearDrawRouteOverlay();
+    setIsDrawRouteMode(true);
+    setIsDrawPanelCollapsed(false);
+    setDrawRouteInteractionMode("draw");
+    setDrawnRoutePoints([]);
+    drawnRoutePointsRef.current = [];
+    setDrawRouteError(null);
+    setActivePanel("map");
+    setStatus("다시 그리기: 한 손가락으로 새 코스를 그려주세요.");
+  }
+
   function beginDrawRoutePinchZoom() {
     const map = mapRef.current;
     const [first, second] = getFirstTwoDrawPointers();
@@ -5211,6 +5229,7 @@ export default function RaceMap() {
 
       setIsDrawRouteMode(false);
       setIsDrawPanelCollapsed(false);
+      setDrawRouteInteractionMode("move");
       setDrawRouteError(null);
       clearDrawRouteOverlay();
       setAutoLoopAllCandidates(candidates);
@@ -7273,6 +7292,16 @@ export default function RaceMap() {
             </div>
 
             <div className="candidate-bottom-sheet-actions bottom-sheet-icon-actions">
+              {isDrawnCandidatePanel && !isGeneratingAnyCourse && (
+                <button
+                  type="button"
+                  onClick={handleRestartDrawRouteAfterSearch}
+                  className="candidate-sheet-control-button candidate-sheet-redraw-button"
+                >
+                  다시 그리기
+                </button>
+              )}
+
               {isGeneratingAnyCourse && (
                 <button
                   type="button"
