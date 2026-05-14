@@ -128,7 +128,7 @@ const RUN_RECORDS_STORAGE_KEY = "runbot:runRecords:v1";
 const COURSE_LIBRARY_STORAGE_KEY = "runbot:courseLibrary:v1";
 const LEGACY_SAVED_COURSES_STORAGE_KEY = "runbot:savedCourses:v1";
 const LEGACY_CUSTOM_COURSES_STORAGE_KEY = "runbot:customCourses:v1";
-const AUTO_LOOP_PAGE_SIZE = 5;
+const AUTO_LOOP_PAGE_SIZE = 3;
 const AUTO_LOOP_COLORS = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#3b82f6"];
 const DEFAULT_DISTANCE_TOLERANCE_M = 500;
 const MAX_ONE_WAY_CANDIDATES_TO_RETURN = 30;
@@ -2116,23 +2116,39 @@ function makeCourseGeoJson(course: Course) {
   } as const;
 }
 
-function makeAutoLoopCandidateGeoJson(candidate: AutoLoopCourseCandidate | null) {
+function makeAutoLoopCandidatesGeoJson(
+  candidates: AutoLoopCourseCandidate[],
+  previewCandidateId: string | null
+) {
+  const orderedCandidates = [...candidates].sort((a, b) => {
+    if (a.candidateId === previewCandidateId) return 1;
+    if (b.candidateId === previewCandidateId) return -1;
+    return 0;
+  });
+
   return {
     type: "FeatureCollection",
-    features: candidate
-      ? [
-          {
-            type: "Feature",
-            properties: {
-              candidateId: candidate.candidateId,
-            },
-            geometry: {
-              type: "LineString",
-              coordinates: candidate.polyline,
-            },
-          },
-        ]
-      : [],
+    features: orderedCandidates.map((candidate) => {
+      const originalIndex = Math.max(
+        0,
+        candidates.findIndex((item) => item.candidateId === candidate.candidateId)
+      );
+      const isPreviewing = candidate.candidateId === previewCandidateId;
+
+      return {
+        type: "Feature",
+        properties: {
+          candidateId: candidate.candidateId,
+          color: getAutoLoopCandidateColor(originalIndex),
+          opacity: isPreviewing ? 0.94 : 0.24,
+          width: isPreviewing ? 7 : 5,
+        },
+        geometry: {
+          type: "LineString",
+          coordinates: candidate.polyline,
+        },
+      };
+    }),
   } as GeoJSON.FeatureCollection<GeoJSON.LineString>;
 }
 
@@ -2142,6 +2158,119 @@ function getAutoLoopCandidateColor(index: number): string {
 
 function getCandidateModeLabel(mode: CandidateMode): string {
   return mode === "oneWay" ? "편도" : "왕복";
+}
+
+function getCandidateRecommendationLabel(
+  candidate: AutoLoopCourseCandidate,
+  index: number
+): string {
+  const isDrawnCandidate = /그리기|원형|루프/.test(candidate.name);
+
+  if (isDrawnCandidate) {
+    return ["그림 유사 후보", "실전 코스 후보", "거리 정확 후보"][index] ?? "대안 후보";
+  }
+
+  return ["균형 추천", "실전 코스형", "거리 정확형"][index] ?? "대안 후보";
+}
+
+function getPracticalCandidateScore(candidate: AutoLoopCourseCandidate): number {
+  const sharpTurnPenaltyM = calculateSharpTurnPenaltyM(candidate.polyline);
+  const repeatedPathPenaltyM = calculateRepeatedPathPenaltyM(candidate.polyline);
+  const tolerancePenaltyM = candidate.isWithinTolerance ? 0 : 850;
+
+  return (
+    sharpTurnPenaltyM * 1.3 +
+    repeatedPathPenaltyM * 0.9 +
+    candidate.distanceErrorM * 0.22 +
+    tolerancePenaltyM
+  );
+}
+
+function selectRecommendedCandidates(
+  candidates: AutoLoopCourseCandidate[]
+): AutoLoopCourseCandidate[] {
+  if (candidates.length <= AUTO_LOOP_PAGE_SIZE) {
+    return candidates;
+  }
+
+  const selected: AutoLoopCourseCandidate[] = [];
+  const pushDistinct = (candidate: AutoLoopCourseCandidate | undefined) => {
+    if (!candidate) return;
+    if (selected.some((item) => item.candidateId === candidate.candidateId)) return;
+    selected.push(candidate);
+  };
+
+  pushDistinct(candidates[0]);
+
+  pushDistinct(
+    [...candidates]
+      .filter((candidate) => !selected.some((item) => item.candidateId === candidate.candidateId))
+      .sort((a, b) => getPracticalCandidateScore(a) - getPracticalCandidateScore(b))[0]
+  );
+
+  pushDistinct(
+    [...candidates]
+      .filter((candidate) => !selected.some((item) => item.candidateId === candidate.candidateId))
+      .sort((a, b) => a.distanceErrorM - b.distanceErrorM)[0]
+  );
+
+  for (const candidate of candidates) {
+    if (selected.length >= AUTO_LOOP_PAGE_SIZE) break;
+    pushDistinct(candidate);
+  }
+
+  return selected.slice(0, AUTO_LOOP_PAGE_SIZE);
+}
+
+function makeMiniCourseSvgPath(polyline: LngLat[]): string {
+  if (polyline.length < 2) return "";
+
+  const lngValues = polyline.map((point) => point[0]);
+  const latValues = polyline.map((point) => point[1]);
+  const minLng = Math.min(...lngValues);
+  const maxLng = Math.max(...lngValues);
+  const minLat = Math.min(...latValues);
+  const maxLat = Math.max(...latValues);
+  const lngRange = Math.max(maxLng - minLng, 0.000001);
+  const latRange = Math.max(maxLat - minLat, 0.000001);
+  const width = 96;
+  const height = 42;
+  const padding = 5;
+  const drawableWidth = width - padding * 2;
+  const drawableHeight = height - padding * 2;
+
+  return polyline
+    .map((point, index) => {
+      const x = padding + ((point[0] - minLng) / lngRange) * drawableWidth;
+      const y = padding + ((maxLat - point[1]) / latRange) * drawableHeight;
+      return `${index === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`;
+    })
+    .join(" ");
+}
+
+function MiniCoursePolyline({
+  polyline,
+  color,
+}: {
+  polyline: LngLat[];
+  color: string;
+}) {
+  const path = makeMiniCourseSvgPath(polyline);
+
+  return (
+    <div className="candidate-mini-course-map" aria-hidden="true">
+      <svg viewBox="0 0 96 42" role="img">
+        <path
+          d={path}
+          fill="none"
+          stroke={color}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="4.5"
+        />
+      </svg>
+    </div>
+  );
 }
 
 function formatPoint(point: LngLat | null): string {
@@ -3449,14 +3578,14 @@ export default function RaceMap() {
   }
 
   function updateAutoLoopCandidateOverlay(
-    candidate: AutoLoopCourseCandidate | null,
-    color: string,
+    candidates: AutoLoopCourseCandidate[],
+    previewCandidateId: string | null,
     mode: CandidateMode
   ) {
     const map = mapRef.current;
     if (!map) return;
 
-    const data = makeAutoLoopCandidateGeoJson(candidate);
+    const data = makeAutoLoopCandidatesGeoJson(candidates, previewCandidateId);
 
     const source = map.getSource("auto-loop-candidates") as
       | mapboxgl.GeoJSONSource
@@ -3481,19 +3610,40 @@ export default function RaceMap() {
           "line-cap": "round",
         },
         paint: {
-          "line-width": 7,
-          "line-opacity": 0.88,
-          "line-color": color,
+          "line-width": ["get", "width"] as any,
+          "line-opacity": ["get", "opacity"] as any,
+          "line-color": ["get", "color"] as any,
         },
       });
     } else {
-      map.setPaintProperty("auto-loop-candidates-line", "line-color", color);
-      map.setPaintProperty("auto-loop-candidates-line", "line-opacity", 0.88);
+      map.setPaintProperty(
+        "auto-loop-candidates-line",
+        "line-width",
+        ["get", "width"] as any
+      );
+      map.setPaintProperty(
+        "auto-loop-candidates-line",
+        "line-opacity",
+        ["get", "opacity"] as any
+      );
+      map.setPaintProperty(
+        "auto-loop-candidates-line",
+        "line-color",
+        ["get", "color"] as any
+      );
     }
 
+    const previewCandidate = candidates.find(
+      (candidate) => candidate.candidateId === previewCandidateId
+    );
+    const previewIndex = previewCandidate
+      ? Math.max(0, candidates.findIndex((candidate) => candidate.candidateId === previewCandidateId))
+      : 0;
+    const previewColor = getAutoLoopCandidateColor(previewIndex);
+
     updatePreviewTurnaroundMarker(
-      mode === "outAndBack" && candidate ? candidate.endpoint : null,
-      color
+      mode === "outAndBack" && previewCandidate ? previewCandidate.endpoint : null,
+      previewColor
     );
   }
 
@@ -3506,7 +3656,7 @@ export default function RaceMap() {
       | undefined;
 
     if (source) {
-      source.setData(makeAutoLoopCandidateGeoJson(null));
+      source.setData(makeAutoLoopCandidatesGeoJson([], null));
     }
 
     previewTurnaroundMarkerRef.current?.getElement().style.setProperty(
@@ -3647,12 +3797,19 @@ export default function RaceMap() {
     candidate: AutoLoopCourseCandidate,
     pageIndex: number,
     shouldFit = true,
-    mode: CandidateMode = candidateMode
+    mode: CandidateMode = candidateMode,
+    visibleCandidates: AutoLoopCourseCandidate[] = autoLoopCandidates
   ) {
-    const color = getAutoLoopCandidateColor(pageIndex);
+    const nextVisibleCandidates = visibleCandidates.length > 0
+      ? visibleCandidates
+      : [candidate];
 
     setAutoLoopPreviewCandidateId(candidate.candidateId);
-    updateAutoLoopCandidateOverlay(candidate, color, mode);
+    updateAutoLoopCandidateOverlay(
+      nextVisibleCandidates,
+      candidate.candidateId,
+      mode
+    );
 
     if (shouldFit) {
       fitMapToAutoLoopCandidate(candidate);
@@ -3675,12 +3832,12 @@ export default function RaceMap() {
 
     if (nextCandidates.length === 0) {
       setAutoLoopPreviewCandidateId(null);
-      updateAutoLoopCandidateOverlay(null, "#3b82f6", mode);
+      updateAutoLoopCandidateOverlay([], null, mode);
       setStatus(`더 이상 표시할 ${getCandidateModeLabel(mode)} 후보가 없습니다.`);
       return;
     }
 
-    previewAutoLoopCandidate(nextCandidates[0], 0, true, mode);
+    previewAutoLoopCandidate(nextCandidates[0], 0, true, mode, nextCandidates);
     computeElevationSummariesForCandidates(nextCandidates);
 
     setStatus(
@@ -4192,7 +4349,7 @@ export default function RaceMap() {
     candidate: AutoLoopCourseCandidate,
     index: number
   ) {
-    previewAutoLoopCandidate(candidate, index, true, candidateMode);
+    previewAutoLoopCandidate(candidate, index, true, candidateMode, autoLoopCandidates);
 
     if (!autoLoopElevationSummaries[candidate.candidateId]) {
       computeElevationSummariesForCandidates([candidate]);
@@ -5232,9 +5389,10 @@ export default function RaceMap() {
       setDrawRouteInteractionMode("move");
       setDrawRouteError(null);
       clearDrawRouteOverlay();
-      setAutoLoopAllCandidates(candidates);
-      showAutoLoopCandidatePage(candidates, 0, "oneWay");
-      setStatus(`${drawCandidateLabel} 후보 ${Math.min(candidates.length, AUTO_LOOP_PAGE_SIZE)}개 표시 중`);
+      const recommendedCandidates = selectRecommendedCandidates(candidates);
+      setAutoLoopAllCandidates(recommendedCandidates);
+      showAutoLoopCandidatePage(recommendedCandidates, 0, "oneWay");
+      setStatus(`${drawCandidateLabel} 추천 후보 ${recommendedCandidates.length}개 표시 중`);
     } catch (rawError) {
       if (isCourseSearchAbortError(rawError)) {
         if (isCurrentCourseSearch(runId, signal)) {
@@ -5496,8 +5654,9 @@ export default function RaceMap() {
         return;
       }
 
-      setAutoLoopAllCandidates(candidates);
-      showAutoLoopCandidatePage(candidates, 0, "outAndBack");
+      const recommendedCandidates = selectRecommendedCandidates(candidates);
+      setAutoLoopAllCandidates(recommendedCandidates);
+      showAutoLoopCandidatePage(recommendedCandidates, 0, "outAndBack");
     } catch (rawError) {
       if (isCourseSearchAbortError(rawError)) {
         if (isCurrentCourseSearch(runId, signal)) {
@@ -5631,8 +5790,9 @@ export default function RaceMap() {
         return;
       }
 
-      setAutoLoopAllCandidates(candidates);
-      showAutoLoopCandidatePage(candidates, 0, "oneWay");
+      const recommendedCandidates = selectRecommendedCandidates(candidates);
+      setAutoLoopAllCandidates(recommendedCandidates);
+      showAutoLoopCandidatePage(recommendedCandidates, 0, "oneWay");
     } catch (rawError) {
       if (isCourseSearchAbortError(rawError)) {
         if (isCurrentCourseSearch(runId, signal)) {
@@ -7351,15 +7511,21 @@ export default function RaceMap() {
               {autoLoopCandidates.length > 0 && (
                 <div className="space-y-2">
                   <div className="candidate-sheet-info-card text-xs text-slate-600">
-                    표시 중: {autoLoopCandidateCursor - autoLoopCandidates.length + 1}
-                    ~{autoLoopCandidateCursor} / {autoLoopAllCandidates.length}개 ·
-                    남은 후보 {autoLoopRemainingCount}개
+                    추천 기준: 1순위 유사도 · 2순위 실전성 · 3순위 거리 정확도
+                    {autoLoopRemainingCount > 0 && (
+                      <span> · 다른 후보 {autoLoopRemainingCount}개</span>
+                    )}
                   </div>
 
                   {autoLoopCandidates.map((candidate, index) => {
                     const isPreviewing =
                       autoLoopPreviewCandidateId === candidate.candidateId;
                     const summary = autoLoopElevationSummaries[candidate.candidateId];
+                    const candidateColor = getAutoLoopCandidateColor(index);
+                    const recommendationLabel = getCandidateRecommendationLabel(
+                      candidate,
+                      index
+                    );
 
                     return (
                       <div
@@ -7378,10 +7544,13 @@ export default function RaceMap() {
                               <span
                                 className="inline-block h-3 w-3 shrink-0 rounded-full"
                                 style={{
-                                  backgroundColor: getAutoLoopCandidateColor(index),
+                                  backgroundColor: candidateColor,
                                 }}
                               />
-                              <span className="truncate">{candidate.name}</span>
+                              <span className="truncate">{recommendationLabel}</span>
+                              <span className="candidate-course-raw-name truncate">
+                                {candidate.name}
+                              </span>
                               {isPreviewing && (
                                 <span className="rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-bold text-white">
                                   미리보기 중
@@ -7409,6 +7578,11 @@ export default function RaceMap() {
                             <div className="mt-1 text-[11px] font-semibold text-slate-700">
                               {formatElevationSummary(summary)}
                             </div>
+
+                            <MiniCoursePolyline
+                              polyline={candidate.polyline}
+                              color={candidateColor}
+                            />
                           </div>
 
                           <div className="candidate-course-card-actions">
@@ -10835,6 +11009,35 @@ export default function RaceMap() {
           gap: 10px;
         }
 
+        .candidate-course-raw-name {
+          color: rgba(71, 85, 105, 0.72);
+          font-size: 11px;
+          font-weight: 800;
+        }
+
+        .candidate-mini-course-map {
+          margin-top: 7px;
+          width: min(116px, 100%);
+          height: 48px;
+          border: 1px solid rgba(255, 255, 255, 0.62);
+          border-radius: 14px;
+          background:
+            radial-gradient(circle at 24% 32%, rgba(59, 130, 246, 0.10), transparent 34%),
+            linear-gradient(135deg, rgba(255, 255, 255, 0.52), rgba(255, 255, 255, 0.16));
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.82),
+            0 8px 18px rgba(15, 23, 42, 0.06);
+          overflow: hidden;
+          backdrop-filter: blur(18px) saturate(165%);
+          -webkit-backdrop-filter: blur(18px) saturate(165%);
+        }
+
+        .candidate-mini-course-map svg {
+          display: block;
+          width: 100%;
+          height: 100%;
+        }
+
         .candidate-course-card-actions {
           display: flex;
           flex: 0 0 148px;
@@ -11622,6 +11825,11 @@ export default function RaceMap() {
 
           .candidate-course-card-actions {
             flex: 0 0 104px !important;
+          }
+
+          .candidate-mini-course-map {
+            width: 108px !important;
+            height: 42px !important;
           }
         }
 
