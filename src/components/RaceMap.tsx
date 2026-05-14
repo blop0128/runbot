@@ -133,9 +133,16 @@ type ExternalRouteDataStatus =
   | "unavailable"
   | "error";
 
+type TrafficSignalDataStatus =
+  | "pending"
+  | "loading"
+  | "ready"
+  | "unavailable"
+  | "error";
+
 type RouteExternalQualityData = {
   trafficSignalCount: number | null;
-  trafficSignalStatus: ExternalRouteDataStatus;
+  trafficSignalStatus: TrafficSignalDataStatus;
   majorRoadRatio: number | null;
   pedestrianPathRatio: number | null;
   roadClassScore: number | null;
@@ -2578,12 +2585,27 @@ function calculateShortSegmentPenaltyM(routePolyline: LngLat[]): number {
 }
 
 
+function normalizeTrafficSignalStatus(
+  status?: ExternalRouteDataStatus | TrafficSignalDataStatus
+): TrafficSignalDataStatus {
+  if (
+    status === "loading" ||
+    status === "ready" ||
+    status === "unavailable" ||
+    status === "error"
+  ) {
+    return status;
+  }
+
+  return "pending";
+}
+
 function getEmptyExternalRouteQualityData(
   status: ExternalRouteDataStatus = "loading"
 ): RouteExternalQualityData {
   return {
     trafficSignalCount: null,
-    trafficSignalStatus: status,
+    trafficSignalStatus: normalizeTrafficSignalStatus(status),
     majorRoadRatio: null,
     pedestrianPathRatio: null,
     roadClassScore: null,
@@ -2875,10 +2897,12 @@ function calculateRouteQualityScore(
   const shortSegmentPenaltyM = calculateShortSegmentPenaltyM(candidate.polyline);
   const tolerancePenaltyM = candidate.isWithinTolerance ? 0 : 850;
   const distanceErrorPenaltyM = candidate.distanceErrorM * 0.22;
-  const trafficSignalPenaltyM =
-    typeof externalData?.trafficSignalCount === "number"
-      ? externalData.trafficSignalCount * 185
-      : 0;
+  const hasTrafficSignalData =
+    externalData?.trafficSignalStatus === "ready" &&
+    typeof externalData.trafficSignalCount === "number";
+  const trafficSignalPenaltyM = hasTrafficSignalData
+    ? externalData.trafficSignalCount * 185
+    : 0;
   const roadClassPenaltyM =
     typeof externalData?.roadClassScore === "number"
       ? externalData.roadClassScore
@@ -2933,6 +2957,35 @@ function formatRatioPercent(value: number | null): string {
   return `${Math.round(value * 100)}%`;
 }
 
+function getTrafficSignalQualityChip(
+  score: RouteQualityScore,
+  externalData?: RouteExternalQualityData
+): string {
+  const status = normalizeTrafficSignalStatus(externalData?.trafficSignalStatus);
+
+  if (status === "ready") {
+    return `신호등 ${score.trafficSignalCount ?? 0}개`;
+  }
+
+  if (status === "error" || status === "unavailable") {
+    return "신호등 확인 불가";
+  }
+
+  return "신호등 확인 중";
+}
+
+function getTrafficSignalRankingPendingPenalty(
+  externalData?: RouteExternalQualityData
+): number {
+  const status = normalizeTrafficSignalStatus(externalData?.trafficSignalStatus);
+
+  if (status === "loading" || status === "pending") {
+    return 24;
+  }
+
+  return 0;
+}
+
 function getRouteQualitySummary(
   candidate: AutoLoopCourseCandidate,
   externalData?: RouteExternalQualityData
@@ -2941,14 +2994,7 @@ function getRouteQualitySummary(
   const chips: string[] = [];
 
   chips.push(`실전성 ${getRouteQualityGrade(score)}`);
-
-  if (externalData?.trafficSignalStatus === "ready") {
-    chips.push(`신호등 ${score.trafficSignalCount ?? 0}개`);
-  } else if (externalData?.trafficSignalStatus === "loading") {
-    chips.push("신호등 확인 중");
-  } else {
-    chips.push("신호등 데이터 대기");
-  }
+  chips.push(getTrafficSignalQualityChip(score, externalData));
 
   if (externalData?.roadClassStatus === "ready") {
     chips.push(`큰길 ${formatRatioPercent(score.majorRoadRatio)}`);
@@ -3016,8 +3062,7 @@ function getOverallRecommendedCandidateScore(
   externalData?: RouteExternalQualityData
 ): number {
   const quality = calculateRouteQualityScore(candidate, externalData);
-  const unresolvedRoadDataPenalty =
-    externalData?.trafficSignalStatus === "ready" ? 0 : 120;
+  const unresolvedRoadDataPenalty = getTrafficSignalRankingPendingPenalty(externalData);
 
   return (
     quality.totalScore * 1.08 +
@@ -4154,7 +4199,24 @@ export default function RaceMap() {
         90
       );
 
-      if (!bbox) return;
+      if (!bbox) {
+        setRouteQualityDataByCandidateId((current) => {
+          const next = { ...current };
+
+          candidates.forEach((candidate) => {
+            next[candidate.candidateId] = mergeExternalRouteQualityData(
+              next[candidate.candidateId],
+              {
+                trafficSignalCount: null,
+                trafficSignalStatus: "unavailable",
+              }
+            );
+          });
+
+          return next;
+        });
+        return;
+      }
 
       try {
         const signalNodes = await fetchTrafficSignalsInBbox(
