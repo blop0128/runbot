@@ -1775,6 +1775,161 @@ function makeDrawRouteCandidateKey(route: Pick<Course, "distanceM" | "polyline">
 }
 
 
+type DrawnPolylineSample = {
+  point: LngLat;
+  distanceM: number;
+};
+
+type DrawnCurvaturePeak = {
+  index: number;
+  distanceM: number;
+  turnDeg: number;
+  curvatureScore: number;
+};
+
+function samplePolylineWithDistances(
+  polyline: LngLat[],
+  options: { spacingM: number; minSamples: number; maxSamples: number }
+): DrawnPolylineSample[] {
+  if (polyline.length === 0) return [];
+
+  const distanceM = getPolylineLengthM(polyline);
+
+  if (distanceM <= 0) {
+    return [{ point: polyline[0], distanceM: 0 }];
+  }
+
+  const sampleCount = clampNumber(
+    Math.ceil(distanceM / Math.max(1, options.spacingM)) + 1,
+    options.minSamples,
+    options.maxSamples
+  );
+
+  return Array.from({ length: sampleCount }, (_, index) => {
+    const ratio = index / Math.max(1, sampleCount - 1);
+    const sampleDistanceM = distanceM * ratio;
+
+    return {
+      point: getLngLatAtDistance(polyline, sampleDistanceM),
+      distanceM: sampleDistanceM,
+    };
+  });
+}
+
+function getDrawnCurvaturePeakCandidates(points: LngLat[]): DrawnCurvaturePeak[] {
+  const drawnDistanceM = getPolylineLengthM(points);
+
+  if (points.length < 5 || drawnDistanceM < 280) return [];
+
+  const samples = samplePolylineWithDistances(points, {
+    spacingM: 25,
+    minSamples: 9,
+    maxSamples: 220,
+  });
+  const windowSize = 2;
+
+  if (samples.length < windowSize * 2 + 1) return [];
+
+  const rawCandidates: DrawnCurvaturePeak[] = [];
+
+  for (let index = windowSize; index < samples.length - windowSize; index += 1) {
+    const previous = samples[index - windowSize];
+    const current = samples[index];
+    const next = samples[index + windowSize];
+    const previousLegM = haversineDistanceM(previous.point, current.point);
+    const nextLegM = haversineDistanceM(current.point, next.point);
+
+    if (previousLegM < 12 || nextLegM < 12) continue;
+
+    const inboundBearingDeg = bearingBetweenPointsDeg(previous.point, current.point);
+    const outboundBearingDeg = bearingBetweenPointsDeg(current.point, next.point);
+    const turnDeg = angleDeltaDeg(inboundBearingDeg, outboundBearingDeg);
+    const localDistanceM = Math.max(1, previousLegM + nextLegM);
+    const curvatureScore = turnDeg / localDistanceM;
+    const minTurnDeg = drawnDistanceM >= 2400 ? 38 : 42;
+    const minCurvatureScore = drawnDistanceM >= 2400 ? 0.30 : 0.34;
+
+    if (turnDeg < minTurnDeg || curvatureScore < minCurvatureScore) {
+      continue;
+    }
+
+    rawCandidates.push({
+      index,
+      distanceM: current.distanceM,
+      turnDeg,
+      curvatureScore,
+    });
+  }
+
+  const localMaxima = rawCandidates.filter((candidate) => {
+    const previous = rawCandidates.find((item) => item.index === candidate.index - 1);
+    const next = rawCandidates.find((item) => item.index === candidate.index + 1);
+
+    return (
+      (!previous || candidate.curvatureScore >= previous.curvatureScore) &&
+      (!next || candidate.curvatureScore >= next.curvatureScore)
+    );
+  });
+  const offsetM = getDrawnCurvatureWaypointOffsetM(drawnDistanceM);
+  const exclusionDistanceM = Math.max(90, offsetM * 1.45);
+  const selected: DrawnCurvaturePeak[] = [];
+
+  [...localMaxima]
+    .sort((a, b) => {
+      if (b.curvatureScore !== a.curvatureScore) {
+        return b.curvatureScore - a.curvatureScore;
+      }
+
+      return b.turnDeg - a.turnDeg;
+    })
+    .forEach((candidate) => {
+      const tooClose = selected.some(
+        (selectedCandidate) =>
+          Math.abs(selectedCandidate.distanceM - candidate.distanceM) < exclusionDistanceM
+      );
+
+      if (!tooClose) {
+        selected.push(candidate);
+      }
+    });
+
+  return selected
+    .sort((a, b) => a.distanceM - b.distanceM)
+    .slice(0, 5);
+}
+
+function getDrawnCurvatureWaypointOffsetM(drawnDistanceM: number): number {
+  if (drawnDistanceM <= 0) return 50;
+
+  return clampNumber(drawnDistanceM * 0.05, 50, 260);
+}
+
+function getDrawnCurvaturePreservingWaypoints(points: LngLat[]): LngLat[] {
+  const drawnDistanceM = getPolylineLengthM(points);
+  const offsetM = getDrawnCurvatureWaypointOffsetM(drawnDistanceM);
+  const endpointMarginM = Math.max(35, offsetM * 0.55);
+  const peaks = getDrawnCurvaturePeakCandidates(points);
+  const waypoints: LngLat[] = [];
+
+  peaks.forEach((peak) => {
+    const beforeDistanceM = peak.distanceM - offsetM;
+    const afterDistanceM = peak.distanceM + offsetM;
+
+    if (beforeDistanceM > endpointMarginM) {
+      waypoints.push(getLngLatAtDistance(points, beforeDistanceM));
+    }
+
+    if (afterDistanceM < drawnDistanceM - endpointMarginM) {
+      waypoints.push(getLngLatAtDistance(points, afterDistanceM));
+    }
+  });
+
+  return compactWaypointAttempt(
+    removeConsecutiveDuplicatePoints(waypoints),
+    Math.max(24, Math.min(64, offsetM * 0.32))
+  );
+}
+
 function getDrawnVirtualWaypointAttempts(points: LngLat[]): LngLat[][] {
   if (points.length < 2) return [];
 
@@ -1789,22 +1944,38 @@ function getDrawnVirtualWaypointAttempts(points: LngLat[]): LngLat[][] {
         ? [5, 7, 9]
         : [4, 5, 6];
   const minDistanceM = drawnDistanceM >= 2500 ? 55 : drawnDistanceM >= 1200 ? 42 : 28;
-  const seen = new Set<string>();
+  const attempts: LngLat[][] = [];
+  const curvatureWaypoints = getDrawnCurvaturePreservingWaypoints(points);
 
-  return virtualPointCounts
-    .map((count) => {
-      const sampled = samplePolylineEvenly(points, count);
-      if (sampled.length < 2) return [];
+  if (curvatureWaypoints.length > 0) {
+    attempts.push(
+      compactWaypointAttempt(
+        removeConsecutiveDuplicatePoints([start, ...curvatureWaypoints, finish]),
+        Math.min(minDistanceM, 48)
+      )
+    );
+  }
 
-      sampled[0] = start;
-      sampled[sampled.length - 1] = finish;
+  virtualPointCounts.forEach((count) => {
+    const sampled = samplePolylineEvenly(points, count);
+    if (sampled.length < 2) return;
 
-      return compactWaypointAttempt(
+    sampled[0] = start;
+    sampled[sampled.length - 1] = finish;
+
+    attempts.push(
+      compactWaypointAttempt(
         removeConsecutiveDuplicatePoints(sampled),
         minDistanceM
-      );
-    })
+      )
+    );
+  });
+
+  const seen = new Set<string>();
+
+  return attempts
     .filter((attempt) => attempt.length >= 3)
+    .filter((attempt) => attempt.length <= 25)
     .filter((attempt) => {
       const key = makeDrawAttemptKey(attempt);
       if (seen.has(key)) return false;
