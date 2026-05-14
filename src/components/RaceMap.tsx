@@ -30,11 +30,10 @@ type CandidateMode = "outAndBack" | "oneWay";
 type CustomRouteMode = "oneWay" | "outAndBack";
 type DrawRouteInteractionMode = "draw" | "move";
 type BottomSheetKind = "candidate" | "mapHud" | "custom" | "draw";
-type CustomPointStep = "start" | "turnaround" | "finish";
+type CustomPointStep = "start" | "waypoint" | "finish";
 type CustomGuide =
   | "select-start"
-  | "add-turnaround"
-  | "select-turnaround"
+  | "select-waypoint"
   | "select-finish"
   | "build-course"
   | null;
@@ -51,7 +50,7 @@ type RunnerHudState = {
 
 type CustomCoursePoints = {
   start: LngLat | null;
-  turnaround: LngLat | null;
+  waypoints: LngLat[];
   finish: LngLat | null;
 };
 
@@ -101,6 +100,71 @@ type ElevationSummary =
       samples: number;
     };
 
+type RouteQualityDataStatus =
+  | "shape-only"
+  | "road-data-loading"
+  | "road-data-ready"
+  | "road-data-partial"
+  | "road-data-error";
+
+type RouteQualityScore = {
+  totalScore: number;
+  practicalScore: number;
+  trafficSignalCount: number | null;
+  majorRoadRatio: number | null;
+  pedestrianPathRatio: number | null;
+  roadClassScore: number | null;
+  sharpTurnPenaltyM: number;
+  zigzagPenaltyM: number;
+  repeatedSegmentPenaltyM: number;
+  shortSegmentPenaltyM: number;
+  distanceErrorPenaltyM: number;
+  tolerancePenaltyM: number;
+  smoothnessPenaltyM: number;
+  futureDataStatus: RouteQualityDataStatus;
+};
+
+type ExternalRouteDataStatus =
+  | "idle"
+  | "loading"
+  | "ready"
+  | "partial"
+  | "unavailable"
+  | "error";
+
+type TrafficSignalDataStatus =
+  | "pending"
+  | "loading"
+  | "ready"
+  | "unavailable"
+  | "error";
+
+type RouteExternalQualityData = {
+  trafficSignalCount: number | null;
+  trafficSignalStatus: TrafficSignalDataStatus;
+  majorRoadRatio: number | null;
+  pedestrianPathRatio: number | null;
+  roadClassScore: number | null;
+  roadClassStatus: ExternalRouteDataStatus;
+  updatedAt: number;
+};
+
+type TrafficSignalNode = {
+  id: string;
+  point: LngLat;
+};
+
+type OverpassElement = {
+  type?: string;
+  id?: number | string;
+  lat?: number;
+  lon?: number;
+};
+
+type OverpassResponse = {
+  elements?: OverpassElement[];
+};
+
 type TerrainQueryableMap = mapboxgl.Map & {
   setTerrain?: (terrain: { source: string; exaggeration?: number } | null) => void;
   queryTerrainElevation?: (
@@ -136,8 +200,38 @@ const DIRECTIONS_PROFILE = "mapbox/walking";
 const FEEDBACK_FORM_URL = "";
 const TEST_PANEL_QUERY_PARAM = "devtools";
 const COURSE_SEARCH_ABORT_MESSAGE = "COURSE_SEARCH_ABORTED";
+const TRAFFIC_SIGNAL_RADIUS_M = 35;
+const ROUTE_ROAD_SAMPLE_SPACING_M = 85;
+const ROUTE_ROAD_QUERY_PIXEL_RADIUS = 9;
+const OVERPASS_API_ENDPOINTS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+];
+const MAJOR_ROAD_CLASSES = new Set([
+  "motorway",
+  "trunk",
+  "primary",
+  "secondary",
+  "tertiary",
+  "motorway_link",
+  "trunk_link",
+  "primary_link",
+  "secondary_link",
+  "tertiary_link",
+]);
+const PEDESTRIAN_FRIENDLY_ROAD_CLASSES = new Set([
+  "path",
+  "footway",
+  "pedestrian",
+  "steps",
+  "cycleway",
+  "track",
+  "living_street",
+  "service",
+]);
 
 const DEFAULT_CENTER: LngLat = [126.9205, 37.5297];
+const MAX_CUSTOM_WAYPOINTS = 23;
 
 const DEFAULT_COURSE: Course = {
   id: "no-course-selected",
@@ -148,7 +242,7 @@ const DEFAULT_COURSE: Course = {
 
 const INITIAL_CUSTOM_POINTS: CustomCoursePoints = {
   start: null,
-  turnaround: null,
+  waypoints: [],
   finish: null,
 };
 
@@ -1317,6 +1411,10 @@ function angleDeltaDeg(a: number, b: number): number {
   return Math.abs((((b - a + 540) % 360) + 360) % 360 - 180);
 }
 
+function signedAngleDeltaDeg(a: number, b: number): number {
+  return (((b - a + 540) % 360) + 360) % 360 - 180;
+}
+
 function calculateSharpTurnPenaltyM(routePolyline: LngLat[]): number {
   const routeLengthM = getPolylineLengthM(routePolyline);
   const routeSamples = samplePolylineEvenly(
@@ -1975,6 +2073,7 @@ function getCustomCandidateBaseName(index: number): string {
 
 async function generateCustomCourseCandidates({
   start,
+  waypoints,
   finish,
   routeMode,
   targetDistanceM,
@@ -1982,6 +2081,7 @@ async function generateCustomCourseCandidates({
   signal,
 }: {
   start: LngLat;
+  waypoints: LngLat[];
   finish: LngLat;
   routeMode: CustomRouteMode;
   targetDistanceM: number;
@@ -1994,11 +2094,19 @@ async function generateCustomCourseCandidates({
     throw new Error("Mapbox token이 없습니다.");
   }
 
-  if (haversineDistanceM(start, finish) < 20) {
-    throw new Error("시작점과 목표지점이 너무 가깝습니다.");
+  const orderedPoints = [start, ...waypoints, finish];
+
+  if (getPolylineLengthM(orderedPoints) < 20) {
+    throw new Error("선택한 지점들이 너무 가깝습니다.");
   }
 
-  const attempts = getCustomRouteWaypointAttempts(start, finish);
+  if (orderedPoints.length > 25) {
+    throw new Error("경유지는 최대 23개까지 선택할 수 있습니다.");
+  }
+
+  const attempts = waypoints.length > 0
+    ? [orderedPoints]
+    : getCustomRouteWaypointAttempts(start, finish);
   const routePool: Array<{
     route: { distanceM: number; polyline: LngLat[] };
     source: "direct" | "waypoint";
@@ -2063,7 +2171,7 @@ async function generateCustomCourseCandidates({
       isWithinTolerance: distanceErrorM <= Math.max(350, targetDistanceM * 0.18),
       bearingDeg: bearingBetweenPointsDeg(start, finish),
       endpoint: finish,
-      straightDistanceM: haversineDistanceM(start, finish),
+      straightDistanceM: getPolylineLengthM([start, ...waypoints, finish]),
       outboundDistanceM:
         routeMode === "outAndBack" ? item.route.distanceM / 2 : item.route.distanceM,
       polyline: item.route.polyline,
@@ -2345,6 +2453,596 @@ function getCandidateModeLabel(mode: CandidateMode): string {
   return mode === "oneWay" ? "편도" : "왕복";
 }
 
+function calculateZigzagPenaltyM(routePolyline: LngLat[]): number {
+  const routeLengthM = getPolylineLengthM(routePolyline);
+
+  if (routeLengthM < 90) return 0;
+
+  const routeSamples = samplePolylineEvenly(
+    routePolyline,
+    clampNumber(Math.ceil(routeLengthM / 20) + 1, 10, 180)
+  );
+
+  if (routeSamples.length < 6) return 0;
+
+  type TurnEvent = {
+    distanceM: number;
+    signedTurnDeg: number;
+    absTurnDeg: number;
+  };
+
+  const bearings: Array<{ bearing: number; distanceM: number }> = [];
+  let cumulativeDistanceM = 0;
+
+  for (let index = 1; index < routeSamples.length; index += 1) {
+    const previous = routeSamples[index - 1];
+    const current = routeSamples[index];
+    const segmentLengthM = haversineDistanceM(previous, current);
+
+    if (segmentLengthM < 8) continue;
+
+    cumulativeDistanceM += segmentLengthM;
+    bearings.push({
+      bearing: bearingBetweenPointsDeg(previous, current),
+      distanceM: cumulativeDistanceM,
+    });
+  }
+
+  if (bearings.length < 5) return 0;
+
+  const turnEvents: TurnEvent[] = [];
+  const minZigzagTurnDeg = 45;
+
+  for (let index = 1; index < bearings.length; index += 1) {
+    const signedTurnDeg = signedAngleDeltaDeg(
+      bearings[index - 1].bearing,
+      bearings[index].bearing
+    );
+    const absTurnDeg = Math.abs(signedTurnDeg);
+
+    if (absTurnDeg < minZigzagTurnDeg) continue;
+
+    turnEvents.push({
+      distanceM: bearings[index].distanceM,
+      signedTurnDeg,
+      absTurnDeg,
+    });
+  }
+
+  if (turnEvents.length < 4) return 0;
+
+  // A smooth loop often keeps turning in the same direction. Treat it as zigzag
+  // only when sharp left/right changes repeat in a short distance window.
+  const zigzagWindowM = 120;
+  const minAlternatingTurnsInWindow = 3;
+  let penaltyM = 0;
+  let index = 0;
+
+  while (index < turnEvents.length) {
+    const windowStart = turnEvents[index].distanceM;
+    const windowEvents = turnEvents.filter((event) => {
+      return event.distanceM >= windowStart && event.distanceM <= windowStart + zigzagWindowM;
+    });
+
+    if (windowEvents.length < minAlternatingTurnsInWindow + 1) {
+      index += 1;
+      continue;
+    }
+
+    let alternatingCount = 0;
+    let turnMagnitudeSum = 0;
+
+    for (let eventIndex = 1; eventIndex < windowEvents.length; eventIndex += 1) {
+      const previous = windowEvents[eventIndex - 1];
+      const current = windowEvents[eventIndex];
+      const isAlternating = Math.sign(previous.signedTurnDeg) !== Math.sign(current.signedTurnDeg);
+
+      if (!isAlternating) continue;
+
+      alternatingCount += 1;
+      turnMagnitudeSum += Math.min(previous.absTurnDeg + current.absTurnDeg, 210);
+    }
+
+    if (alternatingCount >= minAlternatingTurnsInWindow) {
+      const windowPenalty =
+        190 +
+        alternatingCount * 85 +
+        Math.min(turnMagnitudeSum * 0.34, 360);
+      penaltyM += windowPenalty;
+
+      const skipUntilDistanceM = windowStart + zigzagWindowM * 0.72;
+      while (
+        index < turnEvents.length &&
+        turnEvents[index].distanceM <= skipUntilDistanceM
+      ) {
+        index += 1;
+      }
+      continue;
+    }
+
+    index += 1;
+  }
+
+  return penaltyM;
+}
+
+function calculateShortSegmentPenaltyM(routePolyline: LngLat[]): number {
+  if (routePolyline.length < 3) return 0;
+
+  let shortSegmentCount = 0;
+  let veryShortSegmentCount = 0;
+  let shortSegmentDistanceM = 0;
+
+  for (let index = 1; index < routePolyline.length; index += 1) {
+    const segmentLengthM = haversineDistanceM(
+      routePolyline[index - 1],
+      routePolyline[index]
+    );
+
+    if (segmentLengthM < 8) continue;
+
+    if (segmentLengthM < 22) {
+      shortSegmentCount += 1;
+      shortSegmentDistanceM += 22 - segmentLengthM;
+    }
+
+    if (segmentLengthM < 12) {
+      veryShortSegmentCount += 1;
+    }
+  }
+
+  return shortSegmentCount * 8 + veryShortSegmentCount * 16 + shortSegmentDistanceM * 0.55;
+}
+
+
+function normalizeTrafficSignalStatus(
+  status?: ExternalRouteDataStatus | TrafficSignalDataStatus
+): TrafficSignalDataStatus {
+  if (
+    status === "loading" ||
+    status === "ready" ||
+    status === "unavailable" ||
+    status === "error"
+  ) {
+    return status;
+  }
+
+  return "pending";
+}
+
+function getEmptyExternalRouteQualityData(
+  status: ExternalRouteDataStatus = "loading"
+): RouteExternalQualityData {
+  return {
+    trafficSignalCount: null,
+    trafficSignalStatus: normalizeTrafficSignalStatus(status),
+    majorRoadRatio: null,
+    pedestrianPathRatio: null,
+    roadClassScore: null,
+    roadClassStatus: status,
+    updatedAt: Date.now(),
+  };
+}
+
+function getRouteQualityDataStatus(
+  externalData?: RouteExternalQualityData
+): RouteQualityDataStatus {
+  if (!externalData) return "shape-only";
+
+  const statuses = [
+    externalData.trafficSignalStatus,
+    externalData.roadClassStatus,
+  ];
+
+  if (statuses.some((status) => status === "loading")) {
+    return "road-data-loading";
+  }
+
+  if (statuses.every((status) => status === "ready")) {
+    return "road-data-ready";
+  }
+
+  if (statuses.some((status) => status === "ready")) {
+    return "road-data-partial";
+  }
+
+  if (statuses.some((status) => status === "error")) {
+    return "road-data-error";
+  }
+
+  return "shape-only";
+}
+
+function calculateRouteBbox(
+  polylines: LngLat[][],
+  paddingM = 80
+): { south: number; west: number; north: number; east: number } | null {
+  const points = polylines.flat();
+  if (points.length === 0) return null;
+
+  const lngValues = points.map((point) => point[0]);
+  const latValues = points.map((point) => point[1]);
+  const southRaw = Math.min(...latValues);
+  const northRaw = Math.max(...latValues);
+  const westRaw = Math.min(...lngValues);
+  const eastRaw = Math.max(...lngValues);
+  const midLat = (southRaw + northRaw) / 2;
+  const latPadding = paddingM / 111_320;
+  const lngPadding = paddingM / Math.max(111_320 * Math.cos(toRadians(midLat)), 1);
+
+  return {
+    south: southRaw - latPadding,
+    west: westRaw - lngPadding,
+    north: northRaw + latPadding,
+    east: eastRaw + lngPadding,
+  };
+}
+
+function getRouteDistanceToPointM(polyline: LngLat[], point: LngLat): number {
+  if (polyline.length === 0) return Number.POSITIVE_INFINITY;
+  if (polyline.length === 1) return haversineDistanceM(polyline[0], point);
+
+  const origin = point;
+  const localPoint = toLocalMeters(point, origin);
+  let minDistanceM = Number.POSITIVE_INFINITY;
+
+  for (let index = 1; index < polyline.length; index += 1) {
+    const a = toLocalMeters(polyline[index - 1], origin);
+    const b = toLocalMeters(polyline[index], origin);
+    const abX = b.x - a.x;
+    const abY = b.y - a.y;
+    const apX = localPoint.x - a.x;
+    const apY = localPoint.y - a.y;
+    const abLengthSq = abX * abX + abY * abY;
+    const t = abLengthSq <= 0 ? 0 : clampNumber((apX * abX + apY * abY) / abLengthSq, 0, 1);
+    const projectedX = a.x + abX * t;
+    const projectedY = a.y + abY * t;
+    const dx = localPoint.x - projectedX;
+    const dy = localPoint.y - projectedY;
+    minDistanceM = Math.min(minDistanceM, Math.sqrt(dx * dx + dy * dy));
+  }
+
+  return minDistanceM;
+}
+
+function countTrafficSignalsNearRoute(
+  polyline: LngLat[],
+  signalNodes: TrafficSignalNode[],
+  radiusM = TRAFFIC_SIGNAL_RADIUS_M
+): number {
+  const matched = new Set<string>();
+
+  signalNodes.forEach((node) => {
+    if (getRouteDistanceToPointM(polyline, node.point) <= radiusM) {
+      matched.add(node.id);
+    }
+  });
+
+  return matched.size;
+}
+
+async function fetchTrafficSignalsInBbox(
+  bbox: { south: number; west: number; north: number; east: number },
+  signal?: AbortSignal
+): Promise<TrafficSignalNode[]> {
+  const query = `[out:json][timeout:12];node["highway"="traffic_signals"](${bbox.south.toFixed(6)},${bbox.west.toFixed(6)},${bbox.north.toFixed(6)},${bbox.east.toFixed(6)});out body;`;
+  let lastError: unknown = null;
+
+  for (const endpoint of OVERPASS_API_ENDPOINTS) {
+    try {
+      const url = `${endpoint}?data=${encodeURIComponent(query)}`;
+      const response = await fetch(url, {
+        method: "GET",
+        signal,
+        headers: {
+          Accept: "application/json",
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Overpass request failed: ${response.status}`);
+      }
+
+      const data = (await response.json()) as OverpassResponse;
+      const elements = Array.isArray(data.elements) ? data.elements : [];
+
+      return elements
+        .filter((element) => {
+          return (
+            typeof element.lat === "number" &&
+            typeof element.lon === "number" &&
+            Number.isFinite(element.lat) &&
+            Number.isFinite(element.lon)
+          );
+        })
+        .map((element, index) => ({
+          id: `${element.type ?? "node"}-${element.id ?? index}`,
+          point: [element.lon as number, element.lat as number] as LngLat,
+        }));
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Overpass traffic signal request failed.");
+}
+
+function getRoadClassFromFeature(feature: unknown): string | null {
+  const properties =
+    typeof feature === "object" && feature !== null && "properties" in feature
+      ? (feature as { properties?: Record<string, unknown> }).properties
+      : null;
+
+  if (!properties) return null;
+
+  const classLike = properties.class ?? properties.type ?? properties.highway;
+  if (typeof classLike !== "string") return null;
+  return classLike.toLowerCase();
+}
+
+function isRoadLayerId(layerId: string): boolean {
+  const lower = layerId.toLowerCase();
+  return (
+    lower.includes("road") ||
+    lower.includes("street") ||
+    lower.includes("path") ||
+    lower.includes("pedestrian") ||
+    lower.includes("bridge") ||
+    lower.includes("tunnel")
+  );
+}
+
+function getVisibleRoadLayerIds(map: mapboxgl.Map): string[] {
+  const layers = map.getStyle().layers ?? [];
+
+  return layers
+    .filter((layer) => layer.type === "line" && isRoadLayerId(layer.id))
+    .map((layer) => layer.id);
+}
+
+function queryRoadClassMetricsForRoute(
+  map: mapboxgl.Map | null,
+  polyline: LngLat[]
+): Pick<
+  RouteExternalQualityData,
+  "majorRoadRatio" | "pedestrianPathRatio" | "roadClassScore" | "roadClassStatus"
+> {
+  if (!map || polyline.length < 2) {
+    return {
+      majorRoadRatio: null,
+      pedestrianPathRatio: null,
+      roadClassScore: null,
+      roadClassStatus: "unavailable",
+    };
+  }
+
+  const layerIds = getVisibleRoadLayerIds(map);
+  if (layerIds.length === 0) {
+    return {
+      majorRoadRatio: null,
+      pedestrianPathRatio: null,
+      roadClassScore: null,
+      roadClassStatus: "unavailable",
+    };
+  }
+
+  const routeLengthM = getPolylineLengthM(polyline);
+  const samples = samplePolylineEvenly(
+    polyline,
+    clampNumber(Math.ceil(routeLengthM / ROUTE_ROAD_SAMPLE_SPACING_M) + 1, 10, 80)
+  );
+
+  let matchedSamples = 0;
+  let majorSamples = 0;
+  let pedestrianSamples = 0;
+
+  samples.forEach((point) => {
+    const projected = map.project(point);
+    const queryBox = [
+      [projected.x - ROUTE_ROAD_QUERY_PIXEL_RADIUS, projected.y - ROUTE_ROAD_QUERY_PIXEL_RADIUS],
+      [projected.x + ROUTE_ROAD_QUERY_PIXEL_RADIUS, projected.y + ROUTE_ROAD_QUERY_PIXEL_RADIUS],
+    ] as [[number, number], [number, number]];
+    const features = map.queryRenderedFeatures(queryBox, { layers: layerIds });
+
+    const classes = features
+      .map(getRoadClassFromFeature)
+      .filter((value): value is string => Boolean(value));
+
+    if (classes.length === 0) return;
+
+    matchedSamples += 1;
+
+    if (classes.some((roadClass) => MAJOR_ROAD_CLASSES.has(roadClass))) {
+      majorSamples += 1;
+    }
+
+    if (classes.some((roadClass) => PEDESTRIAN_FRIENDLY_ROAD_CLASSES.has(roadClass))) {
+      pedestrianSamples += 1;
+    }
+  });
+
+  if (matchedSamples < 4) {
+    return {
+      majorRoadRatio: null,
+      pedestrianPathRatio: null,
+      roadClassScore: null,
+      roadClassStatus: "unavailable",
+    };
+  }
+
+  const majorRoadRatio = majorSamples / matchedSamples;
+  const pedestrianPathRatio = pedestrianSamples / matchedSamples;
+  const continuityReward = Math.min(majorRoadRatio * 0.55 + pedestrianPathRatio * 0.65, 0.72);
+  const roadClassScore = Math.max(0, 230 - continuityReward * 300);
+
+  return {
+    majorRoadRatio,
+    pedestrianPathRatio,
+    roadClassScore,
+    roadClassStatus: "ready",
+  };
+}
+
+function mergeExternalRouteQualityData(
+  base: RouteExternalQualityData | undefined,
+  update: Partial<RouteExternalQualityData>
+): RouteExternalQualityData {
+  return {
+    ...(base ?? getEmptyExternalRouteQualityData("idle")),
+    ...update,
+    updatedAt: Date.now(),
+  };
+}
+
+function calculateRouteQualityScore(
+  candidate: AutoLoopCourseCandidate,
+  externalData?: RouteExternalQualityData
+): RouteQualityScore {
+  const sharpTurnPenaltyM = calculateSharpTurnPenaltyM(candidate.polyline);
+  const zigzagPenaltyM = calculateZigzagPenaltyM(candidate.polyline);
+  const repeatedSegmentPenaltyM = calculateRepeatedPathPenaltyM(candidate.polyline);
+  const shortSegmentPenaltyM = calculateShortSegmentPenaltyM(candidate.polyline);
+  const tolerancePenaltyM = candidate.isWithinTolerance ? 0 : 850;
+  const distanceErrorPenaltyM = candidate.distanceErrorM * 0.22;
+  const readyTrafficSignalCount =
+    externalData?.trafficSignalStatus === "ready" &&
+    typeof externalData.trafficSignalCount === "number"
+      ? externalData.trafficSignalCount
+      : null;
+  const trafficSignalPenaltyM = readyTrafficSignalCount !== null
+    ? readyTrafficSignalCount * 185
+    : 0;
+  const roadClassPenaltyM =
+    typeof externalData?.roadClassScore === "number"
+      ? externalData.roadClassScore
+      : 0;
+  const smoothnessPenaltyM =
+    sharpTurnPenaltyM * 1.18 +
+    zigzagPenaltyM * 1.10 +
+    shortSegmentPenaltyM * 0.86;
+  const practicalScore =
+    sharpTurnPenaltyM * 1.38 +
+    zigzagPenaltyM * 1.30 +
+    repeatedSegmentPenaltyM * 1.05 +
+    shortSegmentPenaltyM * 0.90 +
+    candidate.distanceErrorM * 0.12 +
+    trafficSignalPenaltyM +
+    roadClassPenaltyM +
+    tolerancePenaltyM;
+  const totalScore =
+    smoothnessPenaltyM +
+    repeatedSegmentPenaltyM * 0.95 +
+    distanceErrorPenaltyM +
+    trafficSignalPenaltyM * 0.82 +
+    roadClassPenaltyM * 0.80 +
+    tolerancePenaltyM;
+
+  return {
+    totalScore,
+    practicalScore,
+    trafficSignalCount: externalData?.trafficSignalCount ?? null,
+    majorRoadRatio: externalData?.majorRoadRatio ?? null,
+    pedestrianPathRatio: externalData?.pedestrianPathRatio ?? null,
+    roadClassScore: externalData?.roadClassScore ?? null,
+    sharpTurnPenaltyM,
+    zigzagPenaltyM,
+    repeatedSegmentPenaltyM,
+    shortSegmentPenaltyM,
+    distanceErrorPenaltyM,
+    tolerancePenaltyM,
+    smoothnessPenaltyM,
+    futureDataStatus: getRouteQualityDataStatus(externalData),
+  };
+}
+
+function getRouteQualityGrade(score: RouteQualityScore): string {
+  if (score.practicalScore < 260) return "좋음";
+  if (score.practicalScore < 620) return "보통";
+  return "주의";
+}
+
+function formatRatioPercent(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "-";
+  return `${Math.round(value * 100)}%`;
+}
+
+function getTrafficSignalQualityChip(
+  score: RouteQualityScore,
+  externalData?: RouteExternalQualityData
+): string {
+  const status = normalizeTrafficSignalStatus(externalData?.trafficSignalStatus);
+
+  if (status === "ready") {
+    return `신호등 ${score.trafficSignalCount ?? 0}개`;
+  }
+
+  if (status === "error" || status === "unavailable") {
+    return "신호등 확인 불가";
+  }
+
+  return "신호등 확인 중";
+}
+
+function getTrafficSignalRankingPendingPenalty(
+  externalData?: RouteExternalQualityData
+): number {
+  const status = normalizeTrafficSignalStatus(externalData?.trafficSignalStatus);
+
+  if (status === "loading" || status === "pending") {
+    return 24;
+  }
+
+  return 0;
+}
+
+function getRouteQualitySummary(
+  candidate: AutoLoopCourseCandidate,
+  externalData?: RouteExternalQualityData
+): string {
+  const score = calculateRouteQualityScore(candidate, externalData);
+  const chips: string[] = [];
+
+  chips.push(`실전성 ${getRouteQualityGrade(score)}`);
+  chips.push(getTrafficSignalQualityChip(score, externalData));
+
+  if (externalData?.roadClassStatus === "ready") {
+    chips.push(`큰길 ${formatRatioPercent(score.majorRoadRatio)}`);
+
+    if ((score.pedestrianPathRatio ?? 0) > 0) {
+      chips.push(`보행축 ${formatRatioPercent(score.pedestrianPathRatio)}`);
+    }
+  } else if (externalData?.roadClassStatus === "loading") {
+    chips.push("도로등급 확인 중");
+  }
+
+  if (score.sharpTurnPenaltyM < 130) {
+    chips.push("급회전 적음");
+  } else if (score.sharpTurnPenaltyM >= 360) {
+    chips.push("급회전 많음");
+  }
+
+  if (score.zigzagPenaltyM < 160) {
+    chips.push("지그재그 적음");
+  } else if (score.zigzagPenaltyM >= 420) {
+    chips.push("지그재그 주의");
+  }
+
+  if (score.repeatedSegmentPenaltyM < 140) {
+    chips.push("반복 적음");
+  } else if (score.repeatedSegmentPenaltyM >= 360) {
+    chips.push("반복 구간 주의");
+  }
+
+  if (candidate.distanceErrorM < 180) {
+    chips.push("거리 정확");
+  }
+
+  return chips.slice(0, 6).join(" · ");
+}
+
 function getCandidateRecommendationLabel(
   candidate: AutoLoopCourseCandidate,
   index: number
@@ -2353,60 +3051,91 @@ function getCandidateRecommendationLabel(
   const isDrawnCandidate = /그리기|원형|루프/.test(candidate.name);
 
   if (isCustomCandidate) {
-    return ["기본 후보", "실전 코스 후보", "거리 균형 후보"][index] ?? "대안 후보";
+    return ["종합 추천", "실전 코스 후보", "거리 균형 후보"][index] ?? "대안 후보";
   }
 
   if (isDrawnCandidate) {
-    return ["그림 유사 후보", "실전 코스 후보", "거리 정확 후보"][index] ?? "대안 후보";
+    return ["종합 추천", "실전 코스 후보", "거리 정확 후보"][index] ?? "대안 후보";
   }
 
-  return ["균형 추천", "실전 코스형", "거리 정확형"][index] ?? "대안 후보";
+  return ["종합 추천", "실전 코스형", "거리 정확형"][index] ?? "대안 후보";
 }
 
-function getPracticalCandidateScore(candidate: AutoLoopCourseCandidate): number {
-  const sharpTurnPenaltyM = calculateSharpTurnPenaltyM(candidate.polyline);
-  const repeatedPathPenaltyM = calculateRepeatedPathPenaltyM(candidate.polyline);
-  const tolerancePenaltyM = candidate.isWithinTolerance ? 0 : 850;
+function getPracticalCandidateScore(
+  candidate: AutoLoopCourseCandidate,
+  externalData?: RouteExternalQualityData
+): number {
+  return calculateRouteQualityScore(candidate, externalData).practicalScore;
+}
+
+function getOverallRecommendedCandidateScore(
+  candidate: AutoLoopCourseCandidate,
+  originalIndex: number,
+  externalData?: RouteExternalQualityData
+): number {
+  const quality = calculateRouteQualityScore(candidate, externalData);
+  const unresolvedRoadDataPenalty = getTrafficSignalRankingPendingPenalty(externalData);
 
   return (
-    sharpTurnPenaltyM * 1.3 +
-    repeatedPathPenaltyM * 0.9 +
-    candidate.distanceErrorM * 0.22 +
-    tolerancePenaltyM
+    quality.totalScore * 1.08 +
+    quality.practicalScore * 0.72 +
+    candidate.distanceErrorM * 0.18 +
+    unresolvedRoadDataPenalty +
+    originalIndex * 24
   );
 }
 
 function selectRecommendedCandidates(
-  candidates: AutoLoopCourseCandidate[]
+  candidates: AutoLoopCourseCandidate[],
+  externalDataByCandidateId?: Record<string, RouteExternalQualityData>
 ): AutoLoopCourseCandidate[] {
-  if (candidates.length <= AUTO_LOOP_PAGE_SIZE) {
-    return candidates;
-  }
+  if (candidates.length === 0) return [];
 
   const selected: AutoLoopCourseCandidate[] = [];
+  const scoredCandidates = candidates.map((candidate, index) => {
+    const externalData = externalDataByCandidateId?.[candidate.candidateId];
+
+    return {
+      candidate,
+      index,
+      externalData,
+      quality: calculateRouteQualityScore(candidate, externalData),
+    };
+  });
+
   const pushDistinct = (candidate: AutoLoopCourseCandidate | undefined) => {
     if (!candidate) return;
     if (selected.some((item) => item.candidateId === candidate.candidateId)) return;
     selected.push(candidate);
   };
 
-  pushDistinct(candidates[0]);
-
   pushDistinct(
-    [...candidates]
-      .filter((candidate) => !selected.some((item) => item.candidateId === candidate.candidateId))
-      .sort((a, b) => getPracticalCandidateScore(a) - getPracticalCandidateScore(b))[0]
+    [...scoredCandidates]
+      .sort((a, b) => {
+        return (
+          getOverallRecommendedCandidateScore(a.candidate, a.index, a.externalData) -
+          getOverallRecommendedCandidateScore(b.candidate, b.index, b.externalData)
+        );
+      })[0]?.candidate
   );
 
   pushDistinct(
-    [...candidates]
-      .filter((candidate) => !selected.some((item) => item.candidateId === candidate.candidateId))
-      .sort((a, b) => a.distanceErrorM - b.distanceErrorM)[0]
+    [...scoredCandidates]
+      .filter((item) => !selected.some((selectedItem) => selectedItem.candidateId === item.candidate.candidateId))
+      .sort((a, b) => a.quality.practicalScore - b.quality.practicalScore)[0]
+      ?.candidate
   );
 
-  for (const candidate of candidates) {
+  pushDistinct(
+    [...scoredCandidates]
+      .filter((item) => !selected.some((selectedItem) => selectedItem.candidateId === item.candidate.candidateId))
+      .sort((a, b) => a.candidate.distanceErrorM - b.candidate.distanceErrorM)[0]
+      ?.candidate
+  );
+
+  for (const item of scoredCandidates) {
     if (selected.length >= AUTO_LOOP_PAGE_SIZE) break;
-    pushDistinct(candidate);
+    pushDistinct(item.candidate);
   }
 
   return selected.slice(0, AUTO_LOOP_PAGE_SIZE);
@@ -2468,57 +3197,74 @@ function formatPoint(point: LngLat | null): string {
   return `${point[1].toFixed(5)}, ${point[0].toFixed(5)}`;
 }
 
+function getCustomOrderedPoints(points: CustomCoursePoints): LngLat[] {
+  return [
+    points.start,
+    ...points.waypoints,
+    points.finish,
+  ].filter((point): point is LngLat => Boolean(point));
+}
+
 function getCustomDraftDistanceM(
   points: CustomCoursePoints,
   routeMode: CustomRouteMode
 ): number | null {
-  if (!points.start || !points.finish) return null;
+  const orderedPoints = getCustomOrderedPoints(points);
 
-  const oneWayDistanceM = haversineDistanceM(points.start, points.finish);
+  if (orderedPoints.length < 2) return null;
+
+  const oneWayDistanceM = getPolylineLengthM(orderedPoints);
 
   return routeMode === "outAndBack" ? oneWayDistanceM * 2 : oneWayDistanceM;
 }
 
 function formatDraftDistance(distanceM: number | null): string {
-  if (distanceM === null || !Number.isFinite(distanceM)) return "시작점과 종료지점을 선택하세요.";
+  if (distanceM === null || !Number.isFinite(distanceM)) return "출발지와 도착지를 선택하세요.";
   if (distanceM < 1000) return `${Math.round(distanceM)}m`;
   return `${(distanceM / 1000).toFixed(2)}km`;
 }
 
 function getCustomStepLabel(step: CustomPointStep): string {
-  if (step === "start") return "시작지점";
-  if (step === "turnaround") return "반환점";
-  return "종료지점";
+  if (step === "start") return "출발지점";
+  if (step === "waypoint") return "경유지";
+  return "도착지점";
 }
 
-function getCustomPointLabel(type: CustomPointStep): string {
-  if (type === "start") return "시작";
-  if (type === "turnaround") return "반환";
-  return "종료";
+function getCustomPointLabel(type: CustomPointStep, index?: number): string {
+  if (type === "start") return "출발";
+  if (type === "waypoint") return typeof index === "number" ? `경유 ${index + 1}` : "경유";
+  return "도착";
 }
 
 function getCustomPointColor(type: CustomPointStep): string {
   if (type === "start") return "#16a34a";
-  if (type === "turnaround") return "#f97316";
+  if (type === "waypoint") return "#2563eb";
   return "#dc2626";
 }
 
 function getNextRequiredStep(points: CustomCoursePoints): CustomPointStep {
   if (!points.start) return "start";
-  if (!points.finish) return "finish";
+  if (!points.finish) return "waypoint";
   return "finish";
 }
 
 function getCustomGuideText(guide: CustomGuide): string {
-  if (guide === "select-start") return "지도를 눌러 시작점을 선택하십시오.";
-  if (guide === "add-turnaround") return "반환점을 추가하려면 반환점 추가 버튼을 누르십시오.";
-  if (guide === "select-turnaround") return "지도를 눌러 반환점을 선택하십시오.";
-  if (guide === "select-finish") return "지도를 눌러 종료 지점을 선택하십시오.";
-  if (guide === "build-course") return "코스 생성 버튼을 눌러 코스를 생성하십시오.";
+  if (guide === "select-start") return "지도를 눌러 출발지점을 선택하십시오.";
+  if (guide === "select-waypoint") return "지도를 눌러 경유지를 순서대로 추가하거나 도착지 선택으로 전환하십시오.";
+  if (guide === "select-finish") return "지도를 눌러 도착지점을 선택하십시오.";
+  if (guide === "build-course") return "후보 만들기 버튼을 눌러 코스 후보를 확인하십시오.";
   return "";
 }
 
-function createCustomPointMarkerElement(type: CustomPointStep) {
+function createPinMarkerElement({
+  label,
+  shortLabel,
+  color,
+}: {
+  label: string;
+  shortLabel: string;
+  color: string;
+}) {
   const wrapper = document.createElement("div");
   wrapper.style.display = "flex";
   wrapper.style.flexDirection = "column";
@@ -2527,23 +3273,31 @@ function createCustomPointMarkerElement(type: CustomPointStep) {
   wrapper.style.touchAction = "none";
   wrapper.style.cursor = "grab";
 
-  const dot = document.createElement("div");
-  dot.textContent = type === "start" ? "S" : type === "turnaround" ? "T" : "F";
-  dot.style.width = "34px";
-  dot.style.height = "34px";
-  dot.style.borderRadius = "9999px";
-  dot.style.background = getCustomPointColor(type);
-  dot.style.color = "white";
-  dot.style.display = "flex";
-  dot.style.alignItems = "center";
-  dot.style.justifyContent = "center";
-  dot.style.boxShadow = "0 4px 12px rgba(0,0,0,0.28)";
-  dot.style.border = "2px solid white";
-  dot.style.fontSize = "14px";
-  dot.style.fontWeight = "800";
+  const pin = document.createElement("div");
+  pin.textContent = shortLabel;
+  pin.style.width = "34px";
+  pin.style.height = "34px";
+  pin.style.borderRadius = "50% 50% 50% 0";
+  pin.style.background = color;
+  pin.style.color = "white";
+  pin.style.display = "flex";
+  pin.style.alignItems = "center";
+  pin.style.justifyContent = "center";
+  pin.style.boxShadow = "0 6px 14px rgba(15,23,42,0.32)";
+  pin.style.border = "2px solid white";
+  pin.style.fontSize = "13px";
+  pin.style.fontWeight = "900";
+  pin.style.transform = "rotate(-45deg)";
+
+  const pinText = document.createElement("span");
+  pinText.textContent = shortLabel;
+  pinText.style.transform = "rotate(45deg)";
+  pinText.style.display = "block";
+  pin.textContent = "";
+  pin.appendChild(pinText);
 
   const text = document.createElement("div");
-  text.textContent = getCustomPointLabel(type);
+  text.textContent = label;
   text.style.background = "rgba(15, 23, 42, 0.9)";
   text.style.color = "white";
   text.style.padding = "2px 6px";
@@ -2551,10 +3305,30 @@ function createCustomPointMarkerElement(type: CustomPointStep) {
   text.style.fontSize = "11px";
   text.style.whiteSpace = "nowrap";
 
-  wrapper.appendChild(dot);
+  wrapper.appendChild(pin);
   wrapper.appendChild(text);
 
   return wrapper;
+}
+
+function createCustomPointMarkerElement(type: CustomPointStep, index?: number) {
+  return createPinMarkerElement({
+    label: getCustomPointLabel(type, index),
+    shortLabel:
+      type === "start" ? "S" : type === "finish" ? "F" : String((index ?? 0) + 1),
+    color: getCustomPointColor(type),
+  });
+}
+
+function createCourseEndpointMarkerElement(
+  type: "start" | "finish",
+  label: string
+) {
+  return createPinMarkerElement({
+    label,
+    shortLabel: type === "start" ? "S" : "F",
+    color: type === "start" ? "#16a34a" : "#dc2626",
+  });
 }
 
 function getSortedRunRecords(records: RunRecord[]): RunRecord[] {
@@ -3230,8 +4004,9 @@ export default function RaceMap() {
   const previewTurnaroundMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const botMarkerRefs = useRef<Record<string, mapboxgl.Marker>>({});
   const customPointMarkerRefs = useRef<
-    Partial<Record<CustomPointStep, mapboxgl.Marker>>
+    Partial<Record<"start" | "finish", mapboxgl.Marker>>
   >({});
+  const customWaypointMarkerRefs = useRef<mapboxgl.Marker[]>([]);
 
   const animationFrameRef = useRef<number | null>(null);
   const lastHudUpdateRef = useRef<number>(0);
@@ -3321,6 +4096,8 @@ export default function RaceMap() {
   const [autoLoopElevationSummaries, setAutoLoopElevationSummaries] = useState<
     Record<string, ElevationSummary>
   >({});
+  const [routeQualityDataByCandidateId, setRouteQualityDataByCandidateId] =
+    useState<Record<string, RouteExternalQualityData>>({});
   const [autoLoopError, setAutoLoopError] = useState<string | null>(null);
 
   const [isRunning, setIsRunning] = useState(false);
@@ -3405,6 +4182,194 @@ export default function RaceMap() {
       ) ?? null
     );
   }, [autoLoopCandidates, autoLoopPreviewCandidateId]);
+
+  const isRouteQualityDataResolvedForVisibleCandidates = useMemo(() => {
+    if (autoLoopCandidates.length === 0) return false;
+
+    return autoLoopCandidates.every((candidate) => {
+      const data = routeQualityDataByCandidateId[candidate.candidateId];
+      return (
+        data?.trafficSignalStatus === "ready" ||
+        data?.trafficSignalStatus === "error" ||
+        data?.trafficSignalStatus === "unavailable"
+      );
+    });
+  }, [autoLoopCandidates, routeQualityDataByCandidateId]);
+
+  useEffect(() => {
+    if (!isMapLoaded || autoLoopCandidates.length === 0) return;
+
+    const controller = new AbortController();
+    const candidates = autoLoopCandidates;
+    const candidateIds = new Set(candidates.map((candidate) => candidate.candidateId));
+
+    setRouteQualityDataByCandidateId((current) => {
+      const next: Record<string, RouteExternalQualityData> = {};
+
+      candidates.forEach((candidate) => {
+        next[candidate.candidateId] = mergeExternalRouteQualityData(
+          current[candidate.candidateId],
+          {
+            trafficSignalStatus:
+              current[candidate.candidateId]?.trafficSignalStatus === "ready"
+                ? "ready"
+                : "loading",
+            roadClassStatus:
+              current[candidate.candidateId]?.roadClassStatus === "ready"
+                ? "ready"
+                : "loading",
+          }
+        );
+      });
+
+      return next;
+    });
+
+    const roadDataById: Record<string, Partial<RouteExternalQualityData>> = {};
+
+    candidates.forEach((candidate) => {
+      const roadMetrics = queryRoadClassMetricsForRoute(
+        mapRef.current,
+        candidate.polyline
+      );
+
+      roadDataById[candidate.candidateId] = {
+        ...roadMetrics,
+      };
+    });
+
+    setRouteQualityDataByCandidateId((current) => {
+      const next = { ...current };
+
+      candidates.forEach((candidate) => {
+        next[candidate.candidateId] = mergeExternalRouteQualityData(
+          next[candidate.candidateId],
+          roadDataById[candidate.candidateId]
+        );
+      });
+
+      return next;
+    });
+
+    const run = async () => {
+      const bbox = calculateRouteBbox(
+        candidates.map((candidate) => candidate.polyline),
+        90
+      );
+
+      if (!bbox) {
+        setRouteQualityDataByCandidateId((current) => {
+          const next = { ...current };
+
+          candidates.forEach((candidate) => {
+            next[candidate.candidateId] = mergeExternalRouteQualityData(
+              next[candidate.candidateId],
+              {
+                trafficSignalCount: null,
+                trafficSignalStatus: "unavailable",
+              }
+            );
+          });
+
+          return next;
+        });
+        return;
+      }
+
+      try {
+        const signalNodes = await fetchTrafficSignalsInBbox(
+          bbox,
+          controller.signal
+        );
+
+        if (controller.signal.aborted) return;
+
+        setRouteQualityDataByCandidateId((current) => {
+          const next = { ...current };
+
+          candidates.forEach((candidate) => {
+            if (!candidateIds.has(candidate.candidateId)) return;
+
+            const count = countTrafficSignalsNearRoute(
+              candidate.polyline,
+              signalNodes
+            );
+
+            next[candidate.candidateId] = mergeExternalRouteQualityData(
+              next[candidate.candidateId],
+              {
+                trafficSignalCount: count,
+                trafficSignalStatus: "ready",
+              }
+            );
+          });
+
+          return next;
+        });
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        console.warn("Failed to fetch traffic signals around routes:", error);
+
+        setRouteQualityDataByCandidateId((current) => {
+          const next = { ...current };
+
+          candidates.forEach((candidate) => {
+            next[candidate.candidateId] = mergeExternalRouteQualityData(
+              next[candidate.candidateId],
+              {
+                trafficSignalCount: null,
+                trafficSignalStatus: "error",
+              }
+            );
+          });
+
+          return next;
+        });
+      }
+    };
+
+    void run();
+
+    return () => {
+      controller.abort();
+    };
+  }, [autoLoopCandidates, isMapLoaded]);
+
+  useEffect(() => {
+    if (autoLoopCandidates.length <= 1) return;
+    if (!isRouteQualityDataResolvedForVisibleCandidates) return;
+
+    const nextCandidates = selectRecommendedCandidates(
+      autoLoopCandidates,
+      routeQualityDataByCandidateId
+    );
+    const currentOrder = autoLoopCandidates.map((candidate) => candidate.candidateId).join("|");
+    const nextOrder = nextCandidates.map((candidate) => candidate.candidateId).join("|");
+
+    if (currentOrder === nextOrder) return;
+
+    const nextPreviewCandidate =
+      nextCandidates.find(
+        (candidate) => candidate.candidateId === autoLoopPreviewCandidateId
+      ) ?? nextCandidates[0];
+
+    setAutoLoopCandidates(nextCandidates);
+    setAutoLoopPreviewCandidateId(nextPreviewCandidate?.candidateId ?? null);
+
+    if (nextPreviewCandidate) {
+      updateAutoLoopCandidateOverlay(
+        nextCandidates,
+        nextPreviewCandidate.candidateId,
+        candidateMode
+      );
+    }
+  }, [
+    autoLoopCandidates,
+    autoLoopPreviewCandidateId,
+    candidateMode,
+    isRouteQualityDataResolvedForVisibleCandidates,
+    routeQualityDataByCandidateId,
+  ]);
 
   const canBuildCustomCourse =
     Boolean(customPoints.start) &&
@@ -3610,7 +4575,7 @@ export default function RaceMap() {
       setIsCenteringOnCurrentLocation(true);
       setCustomCourseError(null);
       setMapLocationError(null);
-      setStatus("현재 위치를 시작지점으로 설정하는 중...");
+      setStatus("현재 위치를 출발지점으로 설정하는 중...");
 
       const position = await getCurrentPosition();
       const nextLocation: LngLat = [
@@ -3635,7 +4600,7 @@ export default function RaceMap() {
 
       selectCustomPoint("start", nextLocation);
       startMapLocationWatch();
-      setStatus("현재 위치를 시작지점으로 설정했습니다. 종료지점을 선택하세요.");
+      setStatus("현재 위치를 출발지점으로 설정했습니다. 경유지를 추가하거나 도착지를 선택하세요.");
     } catch (rawError) {
       const message = getPositionErrorMessage(rawError);
       setCustomCourseError(message);
@@ -3871,6 +4836,7 @@ export default function RaceMap() {
     setAutoLoopCandidateCursor(0);
     setAutoLoopPreviewCandidateId(null);
     setAutoLoopElevationSummaries({});
+    setRouteQualityDataByCandidateId({});
     setAutoLoopError(null);
     setIsAutoLoopPanelCollapsed(false);
     clearAutoLoopCandidateOverlay();
@@ -4104,17 +5070,49 @@ export default function RaceMap() {
       marker?.remove();
     });
 
+    customWaypointMarkerRefs.current.forEach((marker) => {
+      marker.remove();
+    });
+
     customPointMarkerRefs.current = {};
+    customWaypointMarkerRefs.current = [];
   }
 
-  function updateCustomPointState(type: CustomPointStep, point: LngLat) {
+  function updateCustomEndpointState(
+    type: "start" | "finish",
+    point: LngLat
+  ) {
     setCustomPoints((current) => ({
       ...current,
       [type]: point,
     }));
   }
 
-  function setCustomPointMarker(type: CustomPointStep, point: LngLat) {
+  function updateCustomWaypointState(index: number, point: LngLat) {
+    setCustomPoints((current) => {
+      const nextWaypoints = [...current.waypoints];
+      nextWaypoints[index] = point;
+
+      return {
+        ...current,
+        waypoints: nextWaypoints,
+      };
+    });
+  }
+
+  function refreshCustomWaypointMarkers() {
+    customWaypointMarkerRefs.current.forEach((marker) => {
+      marker.remove();
+    });
+
+    customWaypointMarkerRefs.current = [];
+
+    customPoints.waypoints.forEach((point, index) => {
+      setCustomWaypointMarker(index, point);
+    });
+  }
+
+  function setCustomEndpointMarker(type: "start" | "finish", point: LngLat) {
     const map = mapRef.current;
     if (!map) return;
 
@@ -4142,14 +5140,14 @@ export default function RaceMap() {
 
     marker.on("drag", () => {
       const lngLat = marker.getLngLat();
-      updateCustomPointState(type, [lngLat.lng, lngLat.lat]);
+      updateCustomEndpointState(type, [lngLat.lng, lngLat.lat]);
     });
 
     marker.on("dragend", () => {
       const lngLat = marker.getLngLat();
       const nextPoint: LngLat = [lngLat.lng, lngLat.lat];
 
-      updateCustomPointState(type, nextPoint);
+      updateCustomEndpointState(type, nextPoint);
       marker.getElement().style.cursor = "grab";
       setCustomCourseError(null);
       setStatus(`${getCustomPointLabel(type)} 지점 이동 완료`);
@@ -4158,30 +5156,88 @@ export default function RaceMap() {
     customPointMarkerRefs.current[type] = marker;
   }
 
+  function setCustomWaypointMarker(index: number, point: LngLat) {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const marker = new mapboxgl.Marker({
+      element: createCustomPointMarkerElement("waypoint", index),
+      draggable: true,
+      anchor: "bottom",
+    })
+      .setLngLat(point)
+      .setPopup(new mapboxgl.Popup().setText(getCustomPointLabel("waypoint", index)))
+      .addTo(map);
+
+    marker.on("dragstart", () => {
+      marker.getElement().style.cursor = "grabbing";
+      setCustomCourseError(null);
+      setStatus(`${getCustomPointLabel("waypoint", index)} 지점을 이동하는 중...`);
+    });
+
+    marker.on("drag", () => {
+      const lngLat = marker.getLngLat();
+      updateCustomWaypointState(index, [lngLat.lng, lngLat.lat]);
+    });
+
+    marker.on("dragend", () => {
+      const lngLat = marker.getLngLat();
+      const nextPoint: LngLat = [lngLat.lng, lngLat.lat];
+
+      updateCustomWaypointState(index, nextPoint);
+      marker.getElement().style.cursor = "grab";
+      setCustomCourseError(null);
+      setStatus(`${getCustomPointLabel("waypoint", index)} 지점 이동 완료`);
+    });
+
+    customWaypointMarkerRefs.current[index] = marker;
+  }
+
   function selectCustomPoint(type: CustomPointStep, point: LngLat) {
-    updateCustomPointState(type, point);
-    setCustomPointMarker(type, point);
     setCustomCourseError(null);
 
     if (type === "start") {
-      setCustomPointStep("finish");
-      setCustomGuide("select-finish");
-      setStatus("시작지점 선택 완료 · 목표지점을 선택하세요.");
+      setCustomPoints((current) => ({
+        ...current,
+        start: point,
+      }));
+      setCustomEndpointMarker("start", point);
+      setCustomPointStep("waypoint");
+      setCustomGuide("select-waypoint");
+      setStatus("출발지점 선택 완료 · 경유지를 순서대로 찍거나 도착지 선택으로 전환하세요.");
       return;
     }
 
-    if (type === "turnaround") {
-      setCustomPointStep("finish");
-      setCustomGuide("select-finish");
-      setStatus("반환점 선택 완료");
+    if (type === "waypoint") {
+      if (customPoints.waypoints.length >= MAX_CUSTOM_WAYPOINTS) {
+        setCustomCourseError("경유지는 최대 23개까지 선택할 수 있습니다.");
+        return;
+      }
+
+      const waypointIndex = customPoints.waypoints.length;
+
+      setCustomPoints((current) => ({
+        ...current,
+        waypoints: [...current.waypoints, point],
+      }));
+      setCustomWaypointMarker(waypointIndex, point);
+      setCustomPointStep("waypoint");
+      setCustomGuide("select-waypoint");
+      setStatus(`${getCustomPointLabel("waypoint", waypointIndex)} 추가 완료 · 계속 경유지를 찍거나 도착지 선택으로 전환하세요.`);
       return;
     }
 
+    setCustomPoints((current) => ({
+      ...current,
+      finish: point,
+    }));
+    setCustomEndpointMarker("finish", point);
+    setCustomPointStep("finish");
     setCustomGuide("build-course");
-    setStatus("종료지점 선택 완료");
+    setStatus("도착지점 선택 완료 · 후보 만들기를 눌러 코스를 확인하세요.");
   }
 
-  function removeCustomPoint(type: CustomPointStep) {
+  function removeCustomEndpoint(type: "start" | "finish") {
     const marker = customPointMarkerRefs.current[type];
     marker?.remove();
     delete customPointMarkerRefs.current[type];
@@ -4197,8 +5253,8 @@ export default function RaceMap() {
       setCustomPointStep("start");
       setCustomGuide("select-start");
     } else if (!next.finish) {
-      setCustomPointStep(getNextRequiredStep(next));
-      setCustomGuide("select-finish");
+      setCustomPointStep("waypoint");
+      setCustomGuide("select-waypoint");
     } else {
       setCustomPointStep("finish");
       setCustomGuide("build-course");
@@ -4206,6 +5262,37 @@ export default function RaceMap() {
 
     setCustomCourseError(null);
     setStatus(`${getCustomPointLabel(type)} 지점을 취소했습니다.`);
+  }
+
+  function removeCustomWaypoint(index: number) {
+    const nextWaypoints = customPoints.waypoints.filter(
+      (_, waypointIndex) => waypointIndex !== index
+    );
+
+    customWaypointMarkerRefs.current.forEach((marker) => marker.remove());
+    customWaypointMarkerRefs.current = [];
+
+    setCustomPoints((current) => ({
+      ...current,
+      waypoints: nextWaypoints,
+    }));
+
+    nextWaypoints.forEach((point, waypointIndex) => {
+      setCustomWaypointMarker(waypointIndex, point);
+    });
+
+    setCustomCourseError(null);
+    setStatus(`경유 ${index + 1} 지점을 취소했습니다.`);
+  }
+
+  function removeCustomPoint(type: CustomPointStep, index?: number) {
+    if (type === "waypoint") {
+      if (typeof index !== "number") return;
+      removeCustomWaypoint(index);
+      return;
+    }
+
+    removeCustomEndpoint(type);
   }
 
   function resetCustomCourseDraft() {
@@ -4504,13 +5591,6 @@ export default function RaceMap() {
   }
 
   function closeCustomGuide() {
-    if (customGuide === "add-turnaround") {
-      setCustomGuide("select-finish");
-      setCustomPointStep("finish");
-      setStatus("지도에서 종료지점을 선택하세요.");
-      return;
-    }
-
     setCustomGuide(null);
   }
 
@@ -4827,14 +5907,20 @@ export default function RaceMap() {
 
       enableTerrainElevationSource(map);
 
-      startMarkerRef.current = new mapboxgl.Marker({ color: "#16a34a" })
+      startMarkerRef.current = new mapboxgl.Marker({
+        element: createCourseEndpointMarkerElement("start", "출발"),
+        anchor: "bottom",
+      })
         .setLngLat(DEFAULT_CENTER)
         .setPopup(new mapboxgl.Popup().setText("Start"))
         .addTo(map);
 
       startMarkerRef.current.getElement().style.display = "none";
 
-      finishMarkerRef.current = new mapboxgl.Marker({ color: "#dc2626" })
+      finishMarkerRef.current = new mapboxgl.Marker({
+        element: createCourseEndpointMarkerElement("finish", "도착"),
+        anchor: "bottom",
+      })
         .setLngLat(DEFAULT_CENTER)
         .setPopup(new mapboxgl.Popup().setText("Finish"))
         .addTo(map);
@@ -5189,7 +6275,7 @@ export default function RaceMap() {
     setIsLeaderboardOpen(false);
     setActivePanel("map");
     setSetupView("main");
-    setStatus("수동 코스 생성: 시작지점을 선택하세요.");
+    setStatus("수동 코스 생성: 출발지점을 선택하세요.");
   }
 
   function handleCancelCustomCourseMode() {
@@ -5677,35 +6763,33 @@ export default function RaceMap() {
     }
   }
 
-  function handleAddTurnaroundPoint() {
+  function handleSelectCustomFinishMode() {
     if (!customPoints.start) {
-      setCustomCourseError("먼저 시작지점을 선택해야 합니다.");
+      setCustomCourseError("먼저 출발지점을 선택해야 합니다.");
+      return;
+    }
+
+    setCustomPointStep("finish");
+    setCustomGuide("select-finish");
+    setCustomCourseError(null);
+    setStatus("다음 지도 클릭은 도착지점으로 설정됩니다.");
+  }
+
+  function handleSelectCustomWaypointMode() {
+    if (!customPoints.start) {
+      setCustomCourseError("먼저 출발지점을 선택해야 합니다.");
       return;
     }
 
     if (customPoints.finish) {
-      setCustomCourseError("이미 종료지점을 선택했습니다. 다시 만들려면 취소 후 시작하세요.");
+      setCustomCourseError("도착지점이 이미 선택되었습니다. 경유지를 더 추가하려면 도착지점을 먼저 취소하세요.");
       return;
     }
 
-    setCustomPointStep("turnaround");
-    setCustomGuide("select-turnaround");
+    setCustomPointStep("waypoint");
+    setCustomGuide("select-waypoint");
     setCustomCourseError(null);
-    setStatus("지도에서 반환점을 선택하세요.");
-  }
-
-  function handleUseStartAsFinish() {
-    if (!customPoints.start) {
-      setCustomCourseError("먼저 시작지점을 선택해야 합니다.");
-      return;
-    }
-
-    if (!customPoints.turnaround) {
-      setCustomCourseError("시작과 종료가 같으려면 반환점이 필요합니다.");
-      return;
-    }
-
-    selectCustomPoint("finish", customPoints.start);
+    setStatus("지도에서 경유지를 순서대로 선택하세요.");
   }
 
   async function handleBuildCustomCourse() {
@@ -5719,12 +6803,12 @@ export default function RaceMap() {
     }
 
     if (!customPoints.start) {
-      setCustomCourseError("시작지점은 필수입니다.");
+      setCustomCourseError("출발지점은 필수입니다.");
       return;
     }
 
     if (!customPoints.finish) {
-      setCustomCourseError("목표지점은 필수입니다.");
+      setCustomCourseError("도착지점은 필수입니다.");
       return;
     }
 
@@ -5742,6 +6826,7 @@ export default function RaceMap() {
 
       const candidates = await generateCustomCourseCandidates({
         start: customPoints.start,
+        waypoints: customPoints.waypoints,
         finish: customPoints.finish,
         routeMode: customRouteMode,
         targetDistanceM,
@@ -7799,8 +8884,8 @@ export default function RaceMap() {
                 <div className="space-y-2">
                   <div className="candidate-sheet-info-card text-xs text-slate-600">
                     {isCustomCandidatePanel
-                      ? "추천 기준: 기본 경로 · 실전 코스 · 거리 균형"
-                      : "추천 기준: 1순위 유사도 · 2순위 실전성 · 3순위 거리 정확도"}
+                      ? "추천 기준: 기본 경로 · 실전성/신호등/도로축 · 거리 균형"
+                      : "추천 기준: 유사도 · 실전성/신호등/도로축 · 거리 정확도"}
                     {autoLoopRemainingCount > 0 && (
                       <span> · 다른 후보 {autoLoopRemainingCount}개</span>
                     )}
@@ -7814,6 +8899,12 @@ export default function RaceMap() {
                     const recommendationLabel = getCandidateRecommendationLabel(
                       candidate,
                       index
+                    );
+                    const routeQualityData =
+                      routeQualityDataByCandidateId[candidate.candidateId];
+                    const routeQualitySummary = getRouteQualitySummary(
+                      candidate,
+                      routeQualityData
                     );
 
                     return (
@@ -7880,6 +8971,10 @@ export default function RaceMap() {
 
                             <div className="mt-1 text-[11px] font-semibold text-slate-700">
                               {formatElevationSummary(summary)}
+                            </div>
+
+                            <div className="mt-1 text-[11px] font-black text-slate-800">
+                              {routeQualitySummary}
                             </div>
 
                             <MiniCoursePolyline
@@ -7988,8 +9083,8 @@ export default function RaceMap() {
               <div className="text-xs font-semibold text-slate-500">
                 {isCustomPanelCollapsed
                   ? `예상 길이 ${formatDraftDistance(customDraftDistanceM)}`
-                  : customRouteMode === "outAndBack" && customPointStep === "finish"
-                    ? "다음 선택: 반환점 겸 회차 지점"
+                  : customPointStep === "waypoint"
+                    ? "경유지를 순서대로 추가하거나 도착지 선택으로 전환"
                     : `다음 선택: ${getCustomStepLabel(customPointStep)}`}
               </div>
             </div>
@@ -8027,7 +9122,7 @@ export default function RaceMap() {
                   {formatDraftDistance(customDraftDistanceM)}
                 </div>
                 <div className="mt-1 text-[11px] font-semibold text-slate-500">
-                  시작점과 목표지점을 모두 고르면 즉시 계산됩니다. 왕복을 선택하면 시작점↔목표지점 거리를 2배로 계산합니다. 마커를 드래그하면 이 값도 실시간으로 바뀝니다. 실제 보행 경로 거리는 코스 생성 후 확정됩니다.
+                  출발지, 경유지, 도착지를 선택한 순서대로 연결해 예상 길이를 계산합니다. 왕복은 도착지까지 간 뒤 같은 경로로 출발지까지 돌아오는 기준입니다. 마커를 드래그하면 이 값도 실시간으로 바뀝니다.
                 </div>
               </div>
 
@@ -8062,7 +9157,7 @@ export default function RaceMap() {
                   </button>
                 </div>
                 <div className="mt-2 text-[11px] font-semibold text-slate-500">
-                  편도는 시작점에서 목표지점까지, 왕복은 목표지점까지 갔다가 시작점으로 돌아오는 코스로 생성합니다.
+                  편도는 출발지 → 경유지들 → 도착지 순서로, 왕복은 같은 순서를 따라 도착지까지 간 뒤 같은 경로로 돌아오는 코스로 생성합니다.
                 </div>
               </div>
 
@@ -8078,43 +9173,114 @@ export default function RaceMap() {
                   }
                   className="w-full rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
-                  {isCenteringOnCurrentLocation ? "현재 위치 확인 중..." : "내 위치를 시작점으로"}
+                  {isCenteringOnCurrentLocation ? "현재 위치 확인 중..." : "내 위치를 출발점으로"}
                 </button>
                 <div className="mt-1 text-[11px] text-blue-700">
-                  GPS 상 현재 위치를 커스텀 코스의 시작지점으로 설정합니다. 종료지점이
+                  GPS 상 현재 위치를 커스텀 코스의 출발지점으로 설정합니다. 도착지점이
                   이미 선택된 경우에는 전체 초기화 후 다시 설정하세요.
                 </div>
               </div>
 
-              <div className="space-y-2 rounded-lg bg-slate-50 p-2 text-xs text-slate-700">
-                {(["start", "finish"] as CustomPointStep[]).map((pointType) => {
-                  const point = customPoints[pointType];
-                  const pointLabel =
-                    pointType === "finish" && customRouteMode === "outAndBack"
-                      ? "반환점"
-                      : getCustomPointLabel(pointType);
+              <div className="custom-route-mode-toggle-card">
+                <div className="mb-2 text-xs font-black text-slate-900">
+                  지도 선택 모드
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={handleSelectCustomWaypointMode}
+                    disabled={
+                      isGeneratingCustomCourse ||
+                      !customPoints.start ||
+                      Boolean(customPoints.finish) ||
+                      customPoints.waypoints.length >= MAX_CUSTOM_WAYPOINTS
+                    }
+                    className={`liquid-choice-button rounded-xl px-3 py-3 text-xs font-black disabled:cursor-not-allowed ${
+                      customPointStep === "waypoint"
+                        ? "liquid-selected-control"
+                        : "liquid-clear-control"
+                    }`}
+                  >
+                    경유지 추가
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSelectCustomFinishMode}
+                    disabled={isGeneratingCustomCourse || !customPoints.start}
+                    className={`liquid-choice-button rounded-xl px-3 py-3 text-xs font-black disabled:cursor-not-allowed ${
+                      customPointStep === "finish"
+                        ? "liquid-selected-control"
+                        : "liquid-clear-control"
+                    }`}
+                  >
+                    도착지 선택
+                  </button>
+                </div>
+                <div className="mt-2 text-[11px] font-semibold text-slate-500">
+                  경유지는 누른 순서대로 코스에 반영됩니다. 도착지점을 선택한 뒤에는 후보 만들기로 넘어갑니다.
+                </div>
+              </div>
 
-                  return (
+              <div className="space-y-2 rounded-lg bg-slate-50 p-2 text-xs text-slate-700">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <span className="font-semibold">출발:</span>{" "}
+                    {formatPoint(customPoints.start)}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => removeCustomPoint("start")}
+                    disabled={!customPoints.start}
+                    className="rounded-md bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    취소
+                  </button>
+                </div>
+
+                {customPoints.waypoints.length > 0 ? (
+                  customPoints.waypoints.map((point, waypointIndex) => (
                     <div
-                      key={pointType}
+                      key={`custom-waypoint-${waypointIndex}`}
                       className="flex items-center justify-between gap-2"
                     >
                       <div>
-                        <span className="font-semibold">{pointLabel}:</span>{" "}
+                        <span className="font-semibold">
+                          {getCustomPointLabel("waypoint", waypointIndex)}:
+                        </span>{" "}
                         {formatPoint(point)}
                       </div>
 
                       <button
                         type="button"
-                        onClick={() => removeCustomPoint(pointType)}
-                        disabled={!point}
-                        className="rounded-md bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                        onClick={() => removeCustomPoint("waypoint", waypointIndex)}
+                        className="rounded-md bg-white px-2 py-1 text-[11px] font-semibold text-slate-700"
                       >
                         취소
                       </button>
                     </div>
-                  );
-                })}
+                  ))
+                ) : (
+                  <div className="text-[11px] font-semibold text-slate-500">
+                    경유지 없음 · 필요한 만큼 지도에서 순서대로 찍을 수 있습니다.
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <span className="font-semibold">도착:</span>{" "}
+                    {formatPoint(customPoints.finish)}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => removeCustomPoint("finish")}
+                    disabled={!customPoints.finish}
+                    className="rounded-md bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    취소
+                  </button>
+                </div>
               </div>
 
               <div className="mt-3 rounded-lg bg-slate-50 p-2">
@@ -8175,7 +9341,7 @@ export default function RaceMap() {
               </div>
 
               <div className="mt-2 text-[11px] text-slate-500">
-                지도에서 시작점과 목표지점을 선택하세요. 편도는 목표지점에서 끝나고, 왕복은 목표지점에서 돌아와 시작점으로 종료됩니다. 저장 옵션을 켜면 나의 코스에서 다시 불러올 수 있습니다.
+                지도에서 출발지, 필요한 경유지, 도착지를 순서대로 선택하세요. 편도는 도착지에서 끝나고, 왕복은 같은 경로를 따라 출발지로 돌아옵니다. 저장 옵션을 켜면 나의 코스에서 다시 불러올 수 있습니다.
               </div>
             </div>
           )}
