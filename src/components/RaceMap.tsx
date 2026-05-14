@@ -101,6 +101,25 @@ type ElevationSummary =
       samples: number;
     };
 
+type RouteQualityDataStatus = "shape-only" | "road-data-ready";
+
+type RouteQualityScore = {
+  totalScore: number;
+  practicalScore: number;
+  trafficSignalCount: number | null;
+  majorRoadRatio: number | null;
+  pedestrianPathRatio: number | null;
+  roadClassScore: number | null;
+  sharpTurnPenaltyM: number;
+  zigzagPenaltyM: number;
+  repeatedSegmentPenaltyM: number;
+  shortSegmentPenaltyM: number;
+  distanceErrorPenaltyM: number;
+  tolerancePenaltyM: number;
+  smoothnessPenaltyM: number;
+  futureDataStatus: RouteQualityDataStatus;
+};
+
 type TerrainQueryableMap = mapboxgl.Map & {
   setTerrain?: (terrain: { source: string; exaggeration?: number } | null) => void;
   queryTerrainElevation?: (
@@ -1317,6 +1336,10 @@ function angleDeltaDeg(a: number, b: number): number {
   return Math.abs((((b - a + 540) % 360) + 360) % 360 - 180);
 }
 
+function signedAngleDeltaDeg(a: number, b: number): number {
+  return (((b - a + 540) % 360) + 360) % 360 - 180;
+}
+
 function calculateSharpTurnPenaltyM(routePolyline: LngLat[]): number {
   const routeLengthM = getPolylineLengthM(routePolyline);
   const routeSamples = samplePolylineEvenly(
@@ -2345,6 +2368,158 @@ function getCandidateModeLabel(mode: CandidateMode): string {
   return mode === "oneWay" ? "편도" : "왕복";
 }
 
+function calculateZigzagPenaltyM(routePolyline: LngLat[]): number {
+  const routeLengthM = getPolylineLengthM(routePolyline);
+  const routeSamples = samplePolylineEvenly(
+    routePolyline,
+    clampNumber(Math.ceil(routeLengthM / 32) + 1, 8, 140)
+  );
+
+  if (routeSamples.length < 5) return 0;
+
+  const bearings: number[] = [];
+
+  for (let index = 1; index < routeSamples.length; index += 1) {
+    const previous = routeSamples[index - 1];
+    const current = routeSamples[index];
+
+    if (haversineDistanceM(previous, current) < 9) continue;
+    bearings.push(bearingBetweenPointsDeg(previous, current));
+  }
+
+  if (bearings.length < 4) return 0;
+
+  let penaltyM = 0;
+  let alternatingTurnCount = 0;
+
+  for (let index = 2; index < bearings.length; index += 1) {
+    const previousTurn = signedAngleDeltaDeg(bearings[index - 2], bearings[index - 1]);
+    const currentTurn = signedAngleDeltaDeg(bearings[index - 1], bearings[index]);
+    const previousAbs = Math.abs(previousTurn);
+    const currentAbs = Math.abs(currentTurn);
+
+    if (previousAbs < 28 || currentAbs < 28) continue;
+
+    const isAlternating = Math.sign(previousTurn) !== Math.sign(currentTurn);
+
+    if (isAlternating) {
+      alternatingTurnCount += 1;
+      penaltyM += Math.min(previousAbs + currentAbs, 190) * 0.70;
+    }
+  }
+
+  return penaltyM + alternatingTurnCount * 34;
+}
+
+function calculateShortSegmentPenaltyM(routePolyline: LngLat[]): number {
+  if (routePolyline.length < 3) return 0;
+
+  let shortSegmentCount = 0;
+  let veryShortSegmentCount = 0;
+  let shortSegmentDistanceM = 0;
+
+  for (let index = 1; index < routePolyline.length; index += 1) {
+    const segmentLengthM = haversineDistanceM(
+      routePolyline[index - 1],
+      routePolyline[index]
+    );
+
+    if (segmentLengthM < 8) continue;
+
+    if (segmentLengthM < 22) {
+      shortSegmentCount += 1;
+      shortSegmentDistanceM += 22 - segmentLengthM;
+    }
+
+    if (segmentLengthM < 12) {
+      veryShortSegmentCount += 1;
+    }
+  }
+
+  return shortSegmentCount * 8 + veryShortSegmentCount * 16 + shortSegmentDistanceM * 0.55;
+}
+
+function calculateRouteQualityScore(
+  candidate: AutoLoopCourseCandidate
+): RouteQualityScore {
+  const sharpTurnPenaltyM = calculateSharpTurnPenaltyM(candidate.polyline);
+  const zigzagPenaltyM = calculateZigzagPenaltyM(candidate.polyline);
+  const repeatedSegmentPenaltyM = calculateRepeatedPathPenaltyM(candidate.polyline);
+  const shortSegmentPenaltyM = calculateShortSegmentPenaltyM(candidate.polyline);
+  const tolerancePenaltyM = candidate.isWithinTolerance ? 0 : 850;
+  const distanceErrorPenaltyM = candidate.distanceErrorM * 0.22;
+  const smoothnessPenaltyM =
+    sharpTurnPenaltyM * 1.18 +
+    zigzagPenaltyM * 1.10 +
+    shortSegmentPenaltyM * 0.86;
+  const practicalScore =
+    sharpTurnPenaltyM * 1.38 +
+    zigzagPenaltyM * 1.30 +
+    repeatedSegmentPenaltyM * 1.05 +
+    shortSegmentPenaltyM * 0.90 +
+    candidate.distanceErrorM * 0.12 +
+    tolerancePenaltyM;
+  const totalScore =
+    smoothnessPenaltyM +
+    repeatedSegmentPenaltyM * 0.95 +
+    distanceErrorPenaltyM +
+    tolerancePenaltyM;
+
+  return {
+    totalScore,
+    practicalScore,
+    trafficSignalCount: null,
+    majorRoadRatio: null,
+    pedestrianPathRatio: null,
+    roadClassScore: null,
+    sharpTurnPenaltyM,
+    zigzagPenaltyM,
+    repeatedSegmentPenaltyM,
+    shortSegmentPenaltyM,
+    distanceErrorPenaltyM,
+    tolerancePenaltyM,
+    smoothnessPenaltyM,
+    futureDataStatus: "shape-only",
+  };
+}
+
+function getRouteQualityGrade(score: RouteQualityScore): string {
+  if (score.practicalScore < 260) return "좋음";
+  if (score.practicalScore < 620) return "보통";
+  return "주의";
+}
+
+function getRouteQualitySummary(candidate: AutoLoopCourseCandidate): string {
+  const score = calculateRouteQualityScore(candidate);
+  const chips: string[] = [];
+
+  chips.push(`실전성 ${getRouteQualityGrade(score)}`);
+
+  if (score.sharpTurnPenaltyM < 130) {
+    chips.push("급회전 적음");
+  } else if (score.sharpTurnPenaltyM >= 360) {
+    chips.push("급회전 많음");
+  }
+
+  if (score.zigzagPenaltyM < 130) {
+    chips.push("지그재그 적음");
+  } else if (score.zigzagPenaltyM >= 360) {
+    chips.push("지그재그 주의");
+  }
+
+  if (score.repeatedSegmentPenaltyM < 140) {
+    chips.push("반복 적음");
+  } else if (score.repeatedSegmentPenaltyM >= 360) {
+    chips.push("반복 구간 주의");
+  }
+
+  if (candidate.distanceErrorM < 180) {
+    chips.push("거리 정확");
+  }
+
+  return chips.slice(0, 4).join(" · ");
+}
+
 function getCandidateRecommendationLabel(
   candidate: AutoLoopCourseCandidate,
   index: number
@@ -2364,16 +2539,7 @@ function getCandidateRecommendationLabel(
 }
 
 function getPracticalCandidateScore(candidate: AutoLoopCourseCandidate): number {
-  const sharpTurnPenaltyM = calculateSharpTurnPenaltyM(candidate.polyline);
-  const repeatedPathPenaltyM = calculateRepeatedPathPenaltyM(candidate.polyline);
-  const tolerancePenaltyM = candidate.isWithinTolerance ? 0 : 850;
-
-  return (
-    sharpTurnPenaltyM * 1.3 +
-    repeatedPathPenaltyM * 0.9 +
-    candidate.distanceErrorM * 0.22 +
-    tolerancePenaltyM
-  );
+  return calculateRouteQualityScore(candidate).practicalScore;
 }
 
 function selectRecommendedCandidates(
@@ -7799,8 +7965,8 @@ export default function RaceMap() {
                 <div className="space-y-2">
                   <div className="candidate-sheet-info-card text-xs text-slate-600">
                     {isCustomCandidatePanel
-                      ? "추천 기준: 기본 경로 · 실전 코스 · 거리 균형"
-                      : "추천 기준: 1순위 유사도 · 2순위 실전성 · 3순위 거리 정확도"}
+                      ? "추천 기준: 기본 경로 · 실전성 점수 · 거리 균형"
+                      : "추천 기준: 1순위 유사도 · 2순위 실전성 점수 · 3순위 거리 정확도"}
                     {autoLoopRemainingCount > 0 && (
                       <span> · 다른 후보 {autoLoopRemainingCount}개</span>
                     )}
@@ -7815,6 +7981,7 @@ export default function RaceMap() {
                       candidate,
                       index
                     );
+                    const routeQualitySummary = getRouteQualitySummary(candidate);
 
                     return (
                       <div
@@ -7880,6 +8047,10 @@ export default function RaceMap() {
 
                             <div className="mt-1 text-[11px] font-semibold text-slate-700">
                               {formatElevationSummary(summary)}
+                            </div>
+
+                            <div className="mt-1 text-[11px] font-black text-slate-800">
+                              {routeQualitySummary}
                             </div>
 
                             <MiniCoursePolyline
