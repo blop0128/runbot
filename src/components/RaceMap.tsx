@@ -2939,6 +2939,7 @@ export default function RaceMap() {
     lastY: number;
     startCollapsed: boolean;
   } | null>(null);
+  const bottomSheetSuppressTapRef = useRef(false);
 
   const [activePanel, setActivePanel] = useState<ActivePanel>("setup");
   const [setupView, setSetupView] = useState<SetupView>("main");
@@ -5784,6 +5785,15 @@ export default function RaceMap() {
     } as CSSProperties;
   }
 
+  function handleBottomSheetHandleClick(sheet: BottomSheetKind) {
+    if (bottomSheetSuppressTapRef.current) {
+      bottomSheetSuppressTapRef.current = false;
+      return;
+    }
+
+    setBottomSheetCollapsedState(sheet, !getBottomSheetCollapsedState(sheet));
+  }
+
   function handleBottomSheetDragStart(
     sheet: BottomSheetKind,
     event: PointerEvent<HTMLElement>
@@ -5799,6 +5809,7 @@ export default function RaceMap() {
       startCollapsed,
     };
 
+    bottomSheetSuppressTapRef.current = false;
     resetBottomSheetDragOffset(sheet);
     setDraggingSheet(sheet);
     event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -5815,6 +5826,10 @@ export default function RaceMap() {
     drag.lastY = event.clientY;
 
     const rawDeltaY = event.clientY - drag.startY;
+    if (Math.abs(rawDeltaY) > 8) {
+      bottomSheetSuppressTapRef.current = true;
+    }
+
     const minDeltaY = drag.startCollapsed ? -260 : -42;
     const maxDeltaY = drag.startCollapsed ? 70 : 300;
     const nextOffsetY = Math.max(minDeltaY, Math.min(maxDeltaY, rawDeltaY));
@@ -5839,6 +5854,12 @@ export default function RaceMap() {
     event.currentTarget.releasePointerCapture?.(event.pointerId);
     setDraggingSheet(null);
     resetBottomSheetDragOffset(sheet);
+
+    if (bottomSheetSuppressTapRef.current) {
+      window.setTimeout(() => {
+        bottomSheetSuppressTapRef.current = false;
+      }, 220);
+    }
 
     if (deltaY <= -54) {
       setBottomSheetCollapsedState(sheet, false);
@@ -6469,6 +6490,36 @@ export default function RaceMap() {
               ? mapLocationError
               : `${currentMapLocationText} · ${currentMapLocationAccuracyText}`}
           </div>
+        </div>
+      )}
+
+      {activePanel === "map" && isDrawRouteMode && (
+        <div className="draw-route-floating-mode-controls" aria-label="지도 조작 모드">
+          <button
+            type="button"
+            onClick={() => handleSetDrawRouteInteractionMode("draw")}
+            disabled={isGeneratingDrawRouteCandidates}
+            aria-label="그리기 모드"
+            title="그리기 모드"
+            className={`draw-route-floating-mode-button ${
+              drawRouteInteractionMode === "draw" ? "draw-route-floating-mode-active" : ""
+            }`}
+          >
+            ✎
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleSetDrawRouteInteractionMode("move")}
+            disabled={isGeneratingDrawRouteCandidates}
+            aria-label="지도 이동 모드"
+            title="지도 이동 모드"
+            className={`draw-route-floating-mode-button ${
+              drawRouteInteractionMode === "move" ? "draw-route-floating-mode-active" : ""
+            }`}
+          >
+            ✋
+          </button>
         </div>
       )}
 
@@ -7166,9 +7217,11 @@ export default function RaceMap() {
           aria-label={`${candidateModeLabel} 후보 목록`}
           style={getBottomSheetDragStyle("candidate")}
         >
-          <div
+          <button
+            type="button"
             className="candidate-bottom-sheet-handle bottom-sheet-drag-handle"
-            aria-hidden="true"
+            aria-label="후보 패널 열기 또는 접기"
+            onClick={() => handleBottomSheetHandleClick("candidate")}
             onPointerDown={(event) => handleBottomSheetDragStart("candidate", event)}
             onPointerMove={(event) => handleBottomSheetDragMove("candidate", event)}
             onPointerUp={(event) => handleBottomSheetDragEnd("candidate", event)}
@@ -7197,7 +7250,7 @@ export default function RaceMap() {
               </div>
             </div>
 
-            <div className="candidate-bottom-sheet-actions">
+            <div className="candidate-bottom-sheet-actions bottom-sheet-icon-actions">
               {isGeneratingAnyCourse && (
                 <button
                   type="button"
@@ -7211,17 +7264,21 @@ export default function RaceMap() {
               <button
                 type="button"
                 onClick={() => setIsAutoLoopPanelCollapsed((value) => !value)}
-                className="candidate-sheet-control-button"
+                aria-label={isAutoLoopPanelCollapsed ? "후보 패널 열기" : "후보 패널 접기"}
+                title={isAutoLoopPanelCollapsed ? "열기" : "접기"}
+                className="bottom-sheet-icon-button"
               >
-                {isAutoLoopPanelCollapsed ? "열기" : "접기"}
+                {isAutoLoopPanelCollapsed ? "⌃" : "—"}
               </button>
 
               <button
                 type="button"
                 onClick={handleCloseAutoLoopPanel}
-                className="candidate-sheet-control-button"
+                aria-label="후보 패널 닫기"
+                title="닫기"
+                className="bottom-sheet-icon-button"
               >
-                닫기
+                ×
               </button>
             </div>
           </div>
@@ -7365,9 +7422,11 @@ export default function RaceMap() {
           aria-label="커스텀 코스 생성"
           style={getBottomSheetDragStyle("custom")}
         >
-          <div
+          <button
+            type="button"
             className="candidate-bottom-sheet-handle bottom-sheet-drag-handle"
-            aria-hidden="true"
+            aria-label="커스텀 코스 패널 열기 또는 접기"
+            onClick={() => handleBottomSheetHandleClick("custom")}
             onPointerDown={(event) => handleBottomSheetDragStart("custom", event)}
             onPointerMove={(event) => handleBottomSheetDragMove("custom", event)}
             onPointerUp={(event) => handleBottomSheetDragEnd("custom", event)}
@@ -7388,21 +7447,25 @@ export default function RaceMap() {
               </div>
             </div>
 
-            <div className="flex shrink-0 gap-1">
+            <div className="flex shrink-0 gap-1 bottom-sheet-icon-actions">
               <button
                 type="button"
                 onClick={() => setIsCustomPanelCollapsed((value) => !value)}
-                className="candidate-sheet-control-button"
+                aria-label={isCustomPanelCollapsed ? "커스텀 코스 패널 열기" : "커스텀 코스 패널 접기"}
+                title={isCustomPanelCollapsed ? "열기" : "접기"}
+                className="bottom-sheet-icon-button"
               >
-                {isCustomPanelCollapsed ? "열기" : "접기"}
+                {isCustomPanelCollapsed ? "⌃" : "—"}
               </button>
 
               <button
                 type="button"
                 onClick={handleCancelCustomCourseMode}
-                className="candidate-sheet-control-button"
+                aria-label="커스텀 코스 닫기"
+                title="닫기"
+                className="bottom-sheet-icon-button"
               >
-                취소
+                ×
               </button>
             </div>
           </div>
@@ -7584,9 +7647,11 @@ export default function RaceMap() {
           aria-label="코스 그리기"
           style={getBottomSheetDragStyle("draw")}
         >
-          <div
+          <button
+            type="button"
             className="candidate-bottom-sheet-handle bottom-sheet-drag-handle"
-            aria-hidden="true"
+            aria-label="코스 그리기 패널 열기 또는 접기"
+            onClick={() => handleBottomSheetHandleClick("draw")}
             onPointerDown={(event) => handleBottomSheetDragStart("draw", event)}
             onPointerMove={(event) => handleBottomSheetDragMove("draw", event)}
             onPointerUp={(event) => handleBottomSheetDragEnd("draw", event)}
@@ -7607,7 +7672,7 @@ export default function RaceMap() {
               </div>
             </div>
 
-            <div className="flex shrink-0 gap-1">
+            <div className="flex shrink-0 gap-1 bottom-sheet-icon-actions">
               {isDrawPanelCollapsed && drawnRoutePoints.length >= 2 && (
                 <button
                   type="button"
@@ -7622,55 +7687,27 @@ export default function RaceMap() {
               <button
                 type="button"
                 onClick={() => setIsDrawPanelCollapsed((value) => !value)}
-                className="candidate-sheet-control-button"
+                aria-label={isDrawPanelCollapsed ? "코스 그리기 패널 열기" : "코스 그리기 패널 접기"}
+                title={isDrawPanelCollapsed ? "열기" : "접기"}
+                className="bottom-sheet-icon-button"
               >
-                {isDrawPanelCollapsed ? "열기" : "접기"}
+                {isDrawPanelCollapsed ? "⌃" : "—"}
               </button>
 
               <button
                 type="button"
                 onClick={handleCancelDrawRouteMode}
-                className="candidate-sheet-control-button"
+                aria-label="코스 그리기 닫기"
+                title="닫기"
+                className="bottom-sheet-icon-button"
               >
-                취소
+                ×
               </button>
             </div>
           </div>
 
           {!isDrawPanelCollapsed && (
             <div className="draw-bottom-sheet-body">
-              <div className="draw-route-mode-toggle-card">
-                <div className="mb-2 text-xs font-black text-slate-900">
-                  지도 조작 방식
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handleSetDrawRouteInteractionMode("draw")}
-                    disabled={isGeneratingDrawRouteCandidates}
-                    className={`liquid-choice-button rounded-xl px-3 py-2 text-xs font-black disabled:cursor-not-allowed ${
-                      drawRouteInteractionMode === "draw"
-                        ? "liquid-selected-control"
-                        : "liquid-clear-control"
-                    }`}
-                  >
-                    그리기 모드
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSetDrawRouteInteractionMode("move")}
-                    disabled={isGeneratingDrawRouteCandidates}
-                    className={`liquid-choice-button rounded-xl px-3 py-2 text-xs font-black disabled:cursor-not-allowed ${
-                      drawRouteInteractionMode === "move"
-                        ? "liquid-selected-control"
-                        : "liquid-clear-control"
-                    }`}
-                  >
-                    지도 이동 모드
-                  </button>
-                </div>
-              </div>
-
               <div className="draw-route-summary-card draw-route-summary-card-compact">
                 <div className="text-[11px] font-bold text-slate-500">
                   그린 선 길이
@@ -7731,9 +7768,11 @@ export default function RaceMap() {
           aria-label="지도 러닝 정보"
           style={getBottomSheetDragStyle("mapHud")}
         >
-          <div
+          <button
+            type="button"
             className="candidate-bottom-sheet-handle bottom-sheet-drag-handle"
-            aria-hidden="true"
+            aria-label="지도 정보 패널 열기 또는 접기"
+            onClick={() => handleBottomSheetHandleClick("mapHud")}
             onPointerDown={(event) => handleBottomSheetDragStart("mapHud", event)}
             onPointerMove={(event) => handleBottomSheetDragMove("mapHud", event)}
             onPointerUp={(event) => handleBottomSheetDragEnd("mapHud", event)}
@@ -7750,13 +7789,15 @@ export default function RaceMap() {
               </div>
             </div>
 
-            <div className="flex shrink-0 gap-1">
+            <div className="flex shrink-0 gap-1 bottom-sheet-icon-actions">
               <button
                 type="button"
                 onClick={() => setIsLeaderboardOpen((value) => !value)}
-                className="candidate-sheet-control-button"
+                aria-label={isLeaderboardOpen ? "지도 정보 패널 접기" : "지도 정보 패널 열기"}
+                title={isLeaderboardOpen ? "접기" : "열기"}
+                className="bottom-sheet-icon-button"
               >
-                {isLeaderboardOpen ? "접기" : "열기"}
+                {isLeaderboardOpen ? "—" : "⌃"}
               </button>
 
               <button
@@ -7765,7 +7806,7 @@ export default function RaceMap() {
                   setActivePanel("setup");
                   setSetupView("main");
                 }}
-                className="candidate-sheet-control-button"
+                className="candidate-sheet-control-button bottom-sheet-text-control-button"
               >
                 설정
               </button>
@@ -11298,6 +11339,255 @@ export default function RaceMap() {
           text-shadow: 0 1px 2px rgba(0, 0, 0, 0.28) !important;
         }
 
+
+
+        /* =========================================================
+           Phase 1 mobile map UI cleanup
+           - Smaller bottom sheets
+           - Iconized collapse/close controls
+           - Tap handle to open/collapse
+           - Floating pen/hand mode controls outside draw sheet
+           ========================================================= */
+        .candidate-bottom-sheet-handle,
+        .race-map-bottom-sheet .candidate-bottom-sheet-handle,
+        .race-custom-bottom-sheet .candidate-bottom-sheet-handle,
+        .race-draw-bottom-sheet .candidate-bottom-sheet-handle {
+          width: 46px !important;
+          height: 4px !important;
+          min-height: 4px !important;
+          margin: 2px auto 7px !important;
+          padding: 0 !important;
+          border: 0 !important;
+          border-radius: 9999px !important;
+          background: rgba(15, 23, 42, 0.24) !important;
+          box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.62) !important;
+          appearance: none !important;
+          -webkit-appearance: none !important;
+        }
+
+        .candidate-bottom-sheet-handle:focus-visible {
+          outline: 2px solid rgba(37, 99, 235, 0.42);
+          outline-offset: 4px;
+        }
+
+        .bottom-sheet-icon-actions {
+          align-items: flex-start !important;
+          gap: 5px !important;
+        }
+
+        .bottom-sheet-icon-button {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 34px;
+          height: 34px;
+          flex: 0 0 34px;
+          border: 1px solid rgba(255, 255, 255, 0.66) !important;
+          border-radius: 9999px !important;
+          background:
+            linear-gradient(135deg, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0.16)) !important;
+          color: rgba(15, 23, 42, 0.88) !important;
+          font-size: 19px;
+          font-weight: 950;
+          line-height: 1;
+          text-shadow: none !important;
+          backdrop-filter: blur(20px) saturate(170%) !important;
+          -webkit-backdrop-filter: blur(20px) saturate(170%) !important;
+          box-shadow:
+            0 10px 22px rgba(15, 23, 42, 0.10),
+            inset 0 1px 0 rgba(255, 255, 255, 0.86) !important;
+        }
+
+        .bottom-sheet-icon-button:active:not(:disabled) {
+          transform: translateY(1px) scale(0.94);
+          filter: brightness(0.94);
+        }
+
+        .bottom-sheet-text-control-button {
+          min-height: 34px !important;
+          padding: 9px 11px !important;
+          white-space: nowrap;
+        }
+
+        .race-candidate-bottom-sheet,
+        .race-map-bottom-sheet,
+        .race-custom-bottom-sheet,
+        .race-draw-bottom-sheet {
+          border-radius: 24px 24px 20px 20px !important;
+          padding: 8px !important;
+        }
+
+        .race-candidate-bottom-sheet {
+          max-height: min(54dvh, 470px) !important;
+        }
+
+        .race-map-bottom-sheet.race-map-hud-open {
+          max-height: min(46dvh, 380px) !important;
+        }
+
+        .race-custom-bottom-sheet {
+          max-height: min(60dvh, 500px) !important;
+        }
+
+        .race-draw-bottom-sheet {
+          max-height: min(38dvh, 330px) !important;
+        }
+
+        .candidate-bottom-sheet-header,
+        .map-bottom-sheet-header,
+        .custom-bottom-sheet-header,
+        .draw-bottom-sheet-header {
+          align-items: center !important;
+          border-radius: 18px !important;
+          padding: 8px 9px !important;
+          gap: 8px !important;
+        }
+
+        .candidate-bottom-sheet-header .text-sm,
+        .map-bottom-sheet-header .text-sm,
+        .custom-bottom-sheet-header .text-sm,
+        .draw-bottom-sheet-header .text-sm {
+          font-size: 13px !important;
+        }
+
+        .candidate-bottom-sheet-status,
+        .map-bottom-sheet-header .text-xs,
+        .custom-bottom-sheet-header .text-xs,
+        .draw-bottom-sheet-header .text-xs {
+          font-size: 11px !important;
+          line-height: 1.25 !important;
+          -webkit-line-clamp: 1;
+        }
+
+        .candidate-bottom-sheet-body,
+        .map-bottom-sheet-body,
+        .custom-bottom-sheet-body,
+        .draw-bottom-sheet-body {
+          padding-top: 7px !important;
+        }
+
+        .candidate-course-card {
+          border-radius: 16px !important;
+          padding: 8px !important;
+        }
+
+        .candidate-course-card-content {
+          gap: 8px !important;
+        }
+
+        .candidate-course-card-actions {
+          flex: 0 0 118px !important;
+          gap: 5px !important;
+        }
+
+        .candidate-card-action-button {
+          min-height: 34px !important;
+          border-radius: 14px !important;
+          padding: 8px 9px !important;
+          font-size: 11px !important;
+        }
+
+        .candidate-sheet-control-button,
+        .candidate-sheet-footer-button {
+          min-height: 34px !important;
+          border-radius: 14px !important;
+          padding: 8px 10px !important;
+          font-size: 11px !important;
+        }
+
+        .candidate-sheet-info-card,
+        .candidate-sheet-error-card,
+        .custom-distance-summary-card,
+        .draw-route-summary-card,
+        .draw-route-guide-card,
+        .custom-route-mode-toggle-card {
+          border-radius: 15px !important;
+          padding: 8px 9px !important;
+          margin-bottom: 7px !important;
+        }
+
+        .draw-route-summary-card-compact {
+          display: none !important;
+        }
+
+        .draw-route-floating-mode-controls {
+          position: absolute;
+          z-index: 64;
+          top: calc(max(8px, env(safe-area-inset-top)) + 186px);
+          right: max(12px, env(safe-area-inset-right));
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          pointer-events: auto;
+        }
+
+        .draw-route-floating-mode-button {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 46px;
+          height: 46px;
+          border: 1px solid rgba(255, 255, 255, 0.72) !important;
+          border-radius: 9999px !important;
+          background:
+            linear-gradient(135deg, rgba(255, 255, 255, 0.68), rgba(255, 255, 255, 0.18)) !important;
+          color: rgba(15, 23, 42, 0.88) !important;
+          font-size: 21px;
+          font-weight: 950;
+          line-height: 1;
+          backdrop-filter: blur(24px) saturate(175%) !important;
+          -webkit-backdrop-filter: blur(24px) saturate(175%) !important;
+          box-shadow:
+            0 16px 34px rgba(15, 23, 42, 0.13),
+            inset 0 1px 0 rgba(255, 255, 255, 0.90),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.24) !important;
+        }
+
+        .draw-route-floating-mode-button:active:not(:disabled) {
+          transform: translateY(1px) scale(0.94);
+          filter: brightness(0.94);
+        }
+
+        .draw-route-floating-mode-button:disabled {
+          color: rgba(100, 116, 139, 0.48) !important;
+          cursor: not-allowed;
+        }
+
+        .draw-route-floating-mode-active:not(:disabled) {
+          border-color: rgba(255, 255, 255, 0.52) !important;
+          background:
+            linear-gradient(135deg, rgba(15, 23, 42, 0.90), rgba(30, 41, 59, 0.66)) !important;
+          color: rgba(255, 255, 255, 0.98) !important;
+          box-shadow:
+            0 18px 38px rgba(15, 23, 42, 0.20),
+            inset 0 1px 0 rgba(255, 255, 255, 0.24),
+            inset 0 -1px 0 rgba(255, 255, 255, 0.08) !important;
+        }
+
+        @media (max-width: 420px) {
+          .map-bottom-sheet-header,
+          .custom-bottom-sheet-header,
+          .draw-bottom-sheet-header {
+            align-items: center !important;
+            flex-direction: row !important;
+          }
+
+          .map-bottom-sheet-header > .flex,
+          .custom-bottom-sheet-header > .flex,
+          .draw-bottom-sheet-header > .flex {
+            display: flex !important;
+            grid-template-columns: none !important;
+            width: auto !important;
+          }
+
+          .candidate-course-card-content {
+            flex-direction: row !important;
+          }
+
+          .candidate-course-card-actions {
+            flex: 0 0 104px !important;
+          }
+        }
 
 
         /* Course search cancellation controls */
