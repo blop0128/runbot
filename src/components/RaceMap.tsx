@@ -4118,6 +4118,7 @@ export default function RaceMap() {
   const [customGuide, setCustomGuide] = useState<CustomGuide>(null);
   const [customPoints, setCustomPoints] =
     useState<CustomCoursePoints>(INITIAL_CUSTOM_POINTS);
+  const customPointsRef = useRef<CustomCoursePoints>(INITIAL_CUSTOM_POINTS);
   const [customCourseError, setCustomCourseError] = useState<string | null>(
     null
   );
@@ -4379,6 +4380,10 @@ export default function RaceMap() {
   const customDraftDistanceM = useMemo(() => {
     return getCustomDraftDistanceM(customPoints, customRouteMode);
   }, [customPoints, customRouteMode]);
+
+  useEffect(() => {
+    customPointsRef.current = customPoints;
+  }, [customPoints]);
 
   const drawnRouteDistanceM = useMemo(() => {
     if (drawnRoutePoints.length < 2) return null;
@@ -5082,10 +5087,15 @@ export default function RaceMap() {
     type: "start" | "finish",
     point: LngLat
   ) {
-    setCustomPoints((current) => ({
-      ...current,
-      [type]: point,
-    }));
+    setCustomPoints((current) => {
+      const nextPoints: CustomCoursePoints = {
+        ...current,
+        [type]: point,
+      };
+
+      customPointsRef.current = nextPoints;
+      return nextPoints;
+    });
   }
 
   function updateCustomWaypointState(index: number, point: LngLat) {
@@ -5093,10 +5103,13 @@ export default function RaceMap() {
       const nextWaypoints = [...current.waypoints];
       nextWaypoints[index] = point;
 
-      return {
+      const nextPoints: CustomCoursePoints = {
         ...current,
         waypoints: nextWaypoints,
       };
+
+      customPointsRef.current = nextPoints;
+      return nextPoints;
     });
   }
 
@@ -5196,11 +5209,16 @@ export default function RaceMap() {
   function selectCustomPoint(type: CustomPointStep, point: LngLat) {
     setCustomCourseError(null);
 
+    const currentPoints = customPointsRef.current;
+
     if (type === "start") {
-      setCustomPoints((current) => ({
-        ...current,
+      const nextPoints: CustomCoursePoints = {
+        ...currentPoints,
         start: point,
-      }));
+      };
+
+      customPointsRef.current = nextPoints;
+      setCustomPoints(nextPoints);
       setCustomEndpointMarker("start", point);
       setCustomPointStep("waypoint");
       setCustomGuide("select-waypoint");
@@ -5209,17 +5227,31 @@ export default function RaceMap() {
     }
 
     if (type === "waypoint") {
-      if (customPoints.waypoints.length >= MAX_CUSTOM_WAYPOINTS) {
+      if (currentPoints.waypoints.length >= MAX_CUSTOM_WAYPOINTS) {
         setCustomCourseError("경유지는 최대 23개까지 선택할 수 있습니다.");
         return;
       }
 
-      const waypointIndex = customPoints.waypoints.length;
+      if (!currentPoints.start) {
+        setCustomCourseError("먼저 출발지점을 선택해야 합니다.");
+        setCustomPointStep("start");
+        setCustomGuide("select-start");
+        return;
+      }
 
-      setCustomPoints((current) => ({
-        ...current,
-        waypoints: [...current.waypoints, point],
-      }));
+      if (currentPoints.finish) {
+        setCustomCourseError("도착지점이 이미 선택되었습니다. 경유지를 더 추가하려면 도착지점을 먼저 취소하세요.");
+        return;
+      }
+
+      const waypointIndex = currentPoints.waypoints.length;
+      const nextPoints: CustomCoursePoints = {
+        ...currentPoints,
+        waypoints: [...currentPoints.waypoints, point],
+      };
+
+      customPointsRef.current = nextPoints;
+      setCustomPoints(nextPoints);
       setCustomWaypointMarker(waypointIndex, point);
       setCustomPointStep("waypoint");
       setCustomGuide("select-waypoint");
@@ -5227,10 +5259,20 @@ export default function RaceMap() {
       return;
     }
 
-    setCustomPoints((current) => ({
-      ...current,
+    if (!currentPoints.start) {
+      setCustomCourseError("먼저 출발지점을 선택해야 합니다.");
+      setCustomPointStep("start");
+      setCustomGuide("select-start");
+      return;
+    }
+
+    const nextPoints: CustomCoursePoints = {
+      ...currentPoints,
       finish: point,
-    }));
+    };
+
+    customPointsRef.current = nextPoints;
+    setCustomPoints(nextPoints);
     setCustomEndpointMarker("finish", point);
     setCustomPointStep("finish");
     setCustomGuide("build-course");
@@ -5247,6 +5289,7 @@ export default function RaceMap() {
       [type]: null,
     };
 
+    customPointsRef.current = next;
     setCustomPoints(next);
 
     if (!next.start) {
@@ -5272,10 +5315,13 @@ export default function RaceMap() {
     customWaypointMarkerRefs.current.forEach((marker) => marker.remove());
     customWaypointMarkerRefs.current = [];
 
-    setCustomPoints((current) => ({
-      ...current,
+    const nextPoints: CustomCoursePoints = {
+      ...customPointsRef.current,
       waypoints: nextWaypoints,
-    }));
+    };
+
+    customPointsRef.current = nextPoints;
+    setCustomPoints(nextPoints);
 
     nextWaypoints.forEach((point, waypointIndex) => {
       setCustomWaypointMarker(waypointIndex, point);
@@ -5298,6 +5344,7 @@ export default function RaceMap() {
   function resetCustomCourseDraft() {
     setCustomPointStep("start");
     setCustomGuide("select-start");
+    customPointsRef.current = INITIAL_CUSTOM_POINTS;
     setCustomPoints(INITIAL_CUSTOM_POINTS);
     setCustomCourseError(null);
     setCustomRouteMode("oneWay");
@@ -6845,6 +6892,9 @@ export default function RaceMap() {
       }
 
       clearCustomPointMarkers();
+      customPointsRef.current = INITIAL_CUSTOM_POINTS;
+      setCustomPoints(INITIAL_CUSTOM_POINTS);
+      setCustomPointStep("start");
       setIsCustomCourseMode(false);
       setCustomGuide(null);
       setIsAutoLoopPanelCollapsed(false);
@@ -9111,6 +9161,46 @@ export default function RaceMap() {
               </button>
             </div>
           </div>
+
+          {isCustomPanelCollapsed && (
+            <div className="custom-collapsed-action-row">
+              <button
+                type="button"
+                onClick={handleSelectCustomWaypointMode}
+                disabled={
+                  isGeneratingCustomCourse ||
+                  !customPoints.start ||
+                  Boolean(customPoints.finish) ||
+                  customPoints.waypoints.length >= MAX_CUSTOM_WAYPOINTS
+                }
+                className={`custom-collapsed-action-button ${
+                  customPointStep === "waypoint" ? "is-active" : ""
+                }`}
+              >
+                경유지 추가
+              </button>
+
+              <button
+                type="button"
+                onClick={handleSelectCustomFinishMode}
+                disabled={isGeneratingCustomCourse || !customPoints.start}
+                className={`custom-collapsed-action-button ${
+                  customPointStep === "finish" ? "is-active" : ""
+                }`}
+              >
+                도착지 선택
+              </button>
+
+              <button
+                type="button"
+                onClick={handleBuildCustomCourse}
+                disabled={!canBuildCustomCourse}
+                className="custom-collapsed-action-button is-primary"
+              >
+                {isGeneratingCustomCourse ? "생성 중" : "후보 만들기"}
+              </button>
+            </div>
+          )}
 
           {!isCustomPanelCollapsed && (
             <div className="custom-bottom-sheet-body">
@@ -13685,6 +13775,49 @@ export default function RaceMap() {
           }
         }
 
+
+
+        .custom-collapsed-action-row {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 7px;
+          padding: 0 12px 12px;
+        }
+
+        .custom-collapsed-action-button {
+          min-height: 34px;
+          border-radius: 12px;
+          border: 1px solid rgba(148, 163, 184, 0.28);
+          background: rgba(255, 255, 255, 0.68);
+          color: rgba(15, 23, 42, 0.78);
+          font-size: 11px;
+          font-weight: 900;
+          box-shadow:
+            0 8px 18px rgba(15, 23, 42, 0.08),
+            inset 0 1px 0 rgba(255, 255, 255, 0.65);
+          transition:
+            transform 140ms ease,
+            background 140ms ease,
+            color 140ms ease,
+            opacity 140ms ease;
+        }
+
+        .custom-collapsed-action-button.is-active,
+        .custom-collapsed-action-button.is-primary {
+          border-color: rgba(15, 23, 42, 0.28);
+          background: rgba(15, 23, 42, 0.88);
+          color: rgba(255, 255, 255, 0.96);
+        }
+
+        .custom-collapsed-action-button:active:not(:disabled) {
+          transform: translateY(1px) scale(0.98);
+        }
+
+        .custom-collapsed-action-button:disabled {
+          color: rgba(100, 116, 139, 0.42);
+          opacity: 0.62;
+          cursor: not-allowed;
+        }
       `}</style>
 
     </div>
