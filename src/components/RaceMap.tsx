@@ -1774,6 +1774,45 @@ function makeDrawRouteCandidateKey(route: Pick<Course, "distanceM" | "polyline">
   ].join("|");
 }
 
+
+function getDrawnVirtualWaypointAttempts(points: LngLat[]): LngLat[][] {
+  if (points.length < 2) return [];
+
+  const start = points[0];
+  const finish = points[points.length - 1];
+  const drawnDistanceM = getPolylineLengthM(points);
+  const virtualPointCounts = drawnDistanceM >= 4200
+    ? [9, 11, 13]
+    : drawnDistanceM >= 2400
+      ? [7, 9, 11]
+      : drawnDistanceM >= 1200
+        ? [5, 7, 9]
+        : [4, 5, 6];
+  const minDistanceM = drawnDistanceM >= 2500 ? 55 : drawnDistanceM >= 1200 ? 42 : 28;
+  const seen = new Set<string>();
+
+  return virtualPointCounts
+    .map((count) => {
+      const sampled = samplePolylineEvenly(points, count);
+      if (sampled.length < 2) return [];
+
+      sampled[0] = start;
+      sampled[sampled.length - 1] = finish;
+
+      return compactWaypointAttempt(
+        removeConsecutiveDuplicatePoints(sampled),
+        minDistanceM
+      );
+    })
+    .filter((attempt) => attempt.length >= 3)
+    .filter((attempt) => {
+      const key = makeDrawAttemptKey(attempt);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
 function getDrawRouteAttempts(points: LngLat[]): LngLat[][] {
   if (points.length < 2) return [];
 
@@ -1866,6 +1905,9 @@ async function generateDrawnRouteCandidates({
   const attempts = isCircular
     ? getLoopWaypointAttempts(drawnPoints)
     : getDrawRouteAttempts(drawnPoints);
+  const virtualWaypointAttempts = !isCircular && !outAndBackLoopPattern
+    ? getDrawnVirtualWaypointAttempts(drawnPoints).slice(0, 3)
+    : [];
   const loopPreservingAttempts =
     outAndBackLoopPattern ||
     hasOpenLoop ||
@@ -1949,6 +1991,28 @@ async function generateDrawnRouteCandidates({
 
       console.warn("Failed to generate out-and-back repeated loop candidate:", {
         pattern: outAndBackLoopPattern,
+        error,
+      });
+    }
+  }
+
+  for (const attempt of virtualWaypointAttempts) {
+    throwIfCourseSearchAborted(signal);
+
+    try {
+      const route = await fetchWalkingRouteBySegments(attempt, token, signal);
+      throwIfCourseSearchAborted(signal);
+      addRouteCandidate(route, {
+        label: "그림 유사",
+        scoreMultiplier: 0.58,
+      });
+    } catch (error) {
+      if (isCourseSearchAbortError(error)) {
+        throw error;
+      }
+
+      console.warn("Failed to generate virtual-waypoint drawn route candidate:", {
+        attempt,
         error,
       });
     }
@@ -5329,6 +5393,51 @@ export default function RaceMap() {
 
     setCustomCourseError(null);
     setStatus(`경유 ${index + 1} 지점을 취소했습니다.`);
+  }
+
+  function moveCustomWaypoint(index: number, direction: -1 | 1) {
+    const currentWaypoints = customPointsRef.current.waypoints;
+    const targetIndex = index + direction;
+
+    if (
+      index < 0 ||
+      index >= currentWaypoints.length ||
+      targetIndex < 0 ||
+      targetIndex >= currentWaypoints.length
+    ) {
+      return;
+    }
+
+    const nextWaypoints = [...currentWaypoints];
+    const currentPoint = nextWaypoints[index];
+    const targetPoint = nextWaypoints[targetIndex];
+
+    if (!currentPoint || !targetPoint) return;
+
+    nextWaypoints[index] = targetPoint;
+    nextWaypoints[targetIndex] = currentPoint;
+
+    customWaypointMarkerRefs.current.forEach((marker) => marker.remove());
+    customWaypointMarkerRefs.current = [];
+
+    const nextPoints: CustomCoursePoints = {
+      ...customPointsRef.current,
+      waypoints: nextWaypoints,
+    };
+
+    customPointsRef.current = nextPoints;
+    setCustomPoints(nextPoints);
+
+    nextWaypoints.forEach((point, waypointIndex) => {
+      setCustomWaypointMarker(waypointIndex, point);
+    });
+
+    setCustomCourseError(null);
+    setStatus(
+      `${getCustomPointLabel("waypoint", index)} 지점을 ${
+        direction < 0 ? "앞" : "뒤"
+      }로 이동했습니다.`
+    );
   }
 
   function removeCustomPoint(type: CustomPointStep, index?: number) {
@@ -9332,22 +9441,48 @@ export default function RaceMap() {
                   customPoints.waypoints.map((point, waypointIndex) => (
                     <div
                       key={`custom-waypoint-${waypointIndex}`}
-                      className="flex items-center justify-between gap-2"
+                      className="flex items-center justify-between gap-2 rounded-lg bg-white/70 p-2 ring-1 ring-slate-200"
                     >
-                      <div>
+                      <div className="min-w-0">
                         <span className="font-semibold">
                           {getCustomPointLabel("waypoint", waypointIndex)}:
                         </span>{" "}
-                        {formatPoint(point)}
+                        <span className="break-all">{formatPoint(point)}</span>
                       </div>
 
-                      <button
-                        type="button"
-                        onClick={() => removeCustomPoint("waypoint", waypointIndex)}
-                        className="rounded-md bg-white px-2 py-1 text-[11px] font-semibold text-slate-700"
-                      >
-                        취소
-                      </button>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => moveCustomWaypoint(waypointIndex, -1)}
+                          disabled={waypointIndex === 0 || isGeneratingCustomCourse}
+                          className="rounded-md bg-white px-2 py-1 text-[11px] font-black text-slate-700 shadow-sm disabled:cursor-not-allowed disabled:opacity-35"
+                          aria-label={`${getCustomPointLabel("waypoint", waypointIndex)} 순서 앞으로 이동`}
+                          title="앞으로"
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => moveCustomWaypoint(waypointIndex, 1)}
+                          disabled={
+                            waypointIndex === customPoints.waypoints.length - 1 ||
+                            isGeneratingCustomCourse
+                          }
+                          className="rounded-md bg-white px-2 py-1 text-[11px] font-black text-slate-700 shadow-sm disabled:cursor-not-allowed disabled:opacity-35"
+                          aria-label={`${getCustomPointLabel("waypoint", waypointIndex)} 순서 뒤로 이동`}
+                          title="뒤로"
+                        >
+                          ↓
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeCustomPoint("waypoint", waypointIndex)}
+                          disabled={isGeneratingCustomCourse}
+                          className="rounded-md bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 shadow-sm disabled:cursor-not-allowed disabled:opacity-35"
+                        >
+                          취소
+                        </button>
+                      </div>
                     </div>
                   ))
                 ) : (
