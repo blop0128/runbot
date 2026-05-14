@@ -3113,6 +3113,21 @@ export default function RaceMap() {
     autoLoopCandidates.length > 0 ||
     autoLoopError !== null;
 
+  const isGeneratedCourseSearchModeActive = isAutoLoopPanelVisible;
+  const isManualCourseModeActive = isCustomCourseMode || isDrawRouteMode;
+  const isGeneratedCourseControlsDisabled =
+    isRunning || isGeneratingAnyCourse || isManualCourseModeActive;
+  const isCustomCourseStartDisabled =
+    isRunning ||
+    isGeneratingAnyCourse ||
+    isGeneratedCourseSearchModeActive ||
+    isDrawRouteMode;
+  const isDrawRouteStartDisabled =
+    isRunning ||
+    isGeneratingAnyCourse ||
+    isGeneratedCourseSearchModeActive ||
+    isCustomCourseMode;
+
   const autoLoopRemainingCount = Math.max(
     autoLoopAllCandidates.length - autoLoopCandidateCursor,
     0
@@ -4742,7 +4757,7 @@ export default function RaceMap() {
   }
 
   function handleStartCustomCourseMode() {
-    if (isRunning) return;
+    if (isCustomCourseStartDisabled) return;
 
     clearAutoLoopCandidates();
     setIsDrawRouteMode(false);
@@ -4914,7 +4929,7 @@ export default function RaceMap() {
   }
 
   function handleStartDrawRouteMode() {
-    if (isRunning) return;
+    if (isDrawRouteStartDisabled) return;
 
     clearAutoLoopCandidates();
     clearCustomPointMarkers();
@@ -5346,7 +5361,7 @@ export default function RaceMap() {
   }
 
   async function handleGenerateOutAndBackCandidates() {
-    if (isRunning || isGeneratingAnyCourse) return;
+    if (isGeneratedCourseControlsDisabled) return;
 
     const targetDistanceM = parseAutoLoopTargetDistanceM();
 
@@ -5480,7 +5495,7 @@ export default function RaceMap() {
   }
 
   async function handleGenerateOneWayCandidates() {
-    if (isRunning || isGeneratingAnyCourse) return;
+    if (isGeneratedCourseControlsDisabled) return;
 
     const targetDistanceM = parseAutoLoopTargetDistanceM();
 
@@ -6840,7 +6855,7 @@ export default function RaceMap() {
                     <button
                       type="button"
                       onClick={handleGenerateOutAndBackCandidates}
-                      disabled={isRunning || isGeneratingAnyCourse}
+                      disabled={isGeneratedCourseControlsDisabled}
                       className="course-action-button course-action-primary px-3 py-2 text-xs disabled:cursor-not-allowed"
                     >
                       {isGeneratingAutoLoop ? "왕복 코스 찾는 중..." : "왕복 코스 찾기"}
@@ -6849,7 +6864,7 @@ export default function RaceMap() {
                     <button
                       type="button"
                       onClick={handleGenerateOneWayCandidates}
-                      disabled={isRunning || isGeneratingAnyCourse}
+                      disabled={isGeneratedCourseControlsDisabled}
                       className="course-action-button course-action-primary px-3 py-2 text-xs disabled:cursor-not-allowed"
                     >
                       {isGeneratingOneWay ? "편도 코스 찾는 중..." : "편도 코스 찾기"}
@@ -6875,7 +6890,7 @@ export default function RaceMap() {
                   <button
                     type="button"
                     onClick={handleStartCustomCourseMode}
-                    disabled={isRunning}
+                    disabled={isCustomCourseStartDisabled}
                     className="course-action-button course-action-primary px-3 py-2 text-sm disabled:cursor-not-allowed"
                   >
                     직접 코스 만들기
@@ -6884,7 +6899,7 @@ export default function RaceMap() {
                   <button
                     type="button"
                     onClick={handleStartDrawRouteMode}
-                    disabled={isRunning || isGeneratingAnyCourse}
+                    disabled={isDrawRouteStartDisabled}
                     className="course-action-button course-action-primary px-3 py-2 text-sm disabled:cursor-not-allowed"
                   >
                     지도에 그려서 코스 찾기
@@ -11609,6 +11624,114 @@ export default function RaceMap() {
 
         .candidate-sheet-stop-button {
           white-space: nowrap;
+        }
+
+        /* =========================================================
+           Phase 1 follow-up fixes
+           - Move draw/move floating controls below the setup tab
+           - Keep every bottom-sheet handle centered
+           - Place collapse/close controls at the handle row on the top-right
+           - Lock incompatible course-picking modes from setup
+           ========================================================= */
+        .race-root-map .draw-route-floating-mode-controls {
+          top: calc(max(8px, env(safe-area-inset-top)) + 82px) !important;
+          left: max(18px, env(safe-area-inset-left)) !important;
+          right: auto !important;
+          flex-direction: row !important;
+          gap: 8px !important;
+        }
+
+        .race-root-map .draw-route-floating-mode-button {
+          width: 42px !important;
+          height: 42px !important;
+          flex: 0 0 42px !important;
+          font-size: 20px !important;
+        }
+
+        .race-candidate-bottom-sheet,
+        .race-map-bottom-sheet,
+        .race-custom-bottom-sheet,
+        .race-draw-bottom-sheet {
+          position: fixed !important;
+          overflow: hidden !important;
+        }
+
+        .race-candidate-bottom-sheet .candidate-bottom-sheet-handle,
+        .race-map-bottom-sheet .candidate-bottom-sheet-handle,
+        .race-custom-bottom-sheet .candidate-bottom-sheet-handle,
+        .race-draw-bottom-sheet .candidate-bottom-sheet-handle {
+          display: block !important;
+          position: relative !important;
+          left: auto !important;
+          right: auto !important;
+          top: auto !important;
+          transform: none !important;
+          width: 46px !important;
+          height: 4px !important;
+          min-height: 4px !important;
+          margin: 4px auto 7px !important;
+        }
+
+        .race-candidate-bottom-sheet .bottom-sheet-icon-actions,
+        .race-map-bottom-sheet .bottom-sheet-icon-actions,
+        .race-custom-bottom-sheet .bottom-sheet-icon-actions,
+        .race-draw-bottom-sheet .bottom-sheet-icon-actions {
+          position: absolute !important;
+          top: 8px !important;
+          right: 10px !important;
+          z-index: 8 !important;
+          display: flex !important;
+          align-items: center !important;
+          justify-content: flex-end !important;
+          gap: 5px !important;
+          width: auto !important;
+          pointer-events: auto !important;
+        }
+
+        .race-candidate-bottom-sheet .bottom-sheet-icon-button,
+        .race-map-bottom-sheet .bottom-sheet-icon-button,
+        .race-custom-bottom-sheet .bottom-sheet-icon-button,
+        .race-draw-bottom-sheet .bottom-sheet-icon-button {
+          width: 30px !important;
+          height: 30px !important;
+          flex: 0 0 30px !important;
+          font-size: 18px !important;
+        }
+
+        .candidate-bottom-sheet-header,
+        .map-bottom-sheet-header,
+        .custom-bottom-sheet-header,
+        .draw-bottom-sheet-header {
+          position: relative !important;
+          padding-right: 78px !important;
+          min-height: 44px !important;
+        }
+
+        .race-candidate-bottom-sheet-collapsed .candidate-bottom-sheet-header,
+        .race-map-hud-collapsed .map-bottom-sheet-header,
+        .race-custom-panel-collapsed .custom-bottom-sheet-header,
+        .race-draw-panel-collapsed .draw-bottom-sheet-header {
+          min-height: 40px !important;
+        }
+
+        .course-action-button:disabled,
+        .distance-preset-button:disabled {
+          opacity: 0.42 !important;
+          filter: grayscale(0.35) !important;
+        }
+
+        @media (max-width: 420px) {
+          .race-root-map .draw-route-floating-mode-controls {
+            top: calc(max(8px, env(safe-area-inset-top)) + 78px) !important;
+            left: max(16px, env(safe-area-inset-left)) !important;
+          }
+
+          .candidate-bottom-sheet-header,
+          .map-bottom-sheet-header,
+          .custom-bottom-sheet-header,
+          .draw-bottom-sheet-header {
+            padding-right: 76px !important;
+          }
         }
       `}</style>
 
