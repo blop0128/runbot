@@ -7623,7 +7623,7 @@ export default function RaceMap() {
                 </div>
               )}
 
-              <div className="mt-2 grid grid-cols-2 gap-2">
+              <div className="custom-course-action-row mt-2 grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   onClick={resetCustomCourseDraft}
@@ -11733,6 +11733,81 @@ export default function RaceMap() {
             padding-right: 76px !important;
           }
         }
+
+
+        /* =========================================================
+           Phase 1 polish fix
+           - Put minimize/close controls on the same top handle line
+           - Keep bottom custom-course action buttons fully visible while scrolling
+           ========================================================= */
+        .race-candidate-bottom-sheet .candidate-bottom-sheet-header,
+        .race-map-bottom-sheet .map-bottom-sheet-header,
+        .race-custom-bottom-sheet .custom-bottom-sheet-header,
+        .race-draw-bottom-sheet .draw-bottom-sheet-header {
+          position: static !important;
+        }
+
+        .race-candidate-bottom-sheet .bottom-sheet-icon-actions,
+        .race-map-bottom-sheet .bottom-sheet-icon-actions,
+        .race-custom-bottom-sheet .bottom-sheet-icon-actions,
+        .race-draw-bottom-sheet .bottom-sheet-icon-actions {
+          top: 5px !important;
+          right: 12px !important;
+          transform: none !important;
+        }
+
+        .race-candidate-bottom-sheet .candidate-bottom-sheet-handle,
+        .race-map-bottom-sheet .candidate-bottom-sheet-handle,
+        .race-custom-bottom-sheet .candidate-bottom-sheet-handle,
+        .race-draw-bottom-sheet .candidate-bottom-sheet-handle {
+          margin-top: 6px !important;
+          margin-bottom: 10px !important;
+        }
+
+        .race-custom-bottom-sheet .custom-bottom-sheet-body {
+          padding-bottom: max(76px, calc(env(safe-area-inset-bottom) + 76px)) !important;
+          scroll-padding-bottom: max(92px, calc(env(safe-area-inset-bottom) + 92px)) !important;
+        }
+
+        .race-custom-bottom-sheet .custom-course-action-row {
+          position: sticky;
+          bottom: 8px;
+          z-index: 6;
+          border: 1px solid rgba(255, 255, 255, 0.58);
+          border-radius: 18px;
+          background:
+            linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.70),
+              rgba(255, 255, 255, 0.30)
+            );
+          padding: 6px;
+          box-shadow:
+            0 14px 34px rgba(15, 23, 42, 0.12),
+            inset 0 1px 0 rgba(255, 255, 255, 0.88);
+          backdrop-filter: blur(22px) saturate(175%);
+          -webkit-backdrop-filter: blur(22px) saturate(175%);
+        }
+
+        .race-custom-bottom-sheet .custom-course-action-row > button {
+          min-height: 42px;
+          border-radius: 14px;
+        }
+
+        @media (max-width: 420px) {
+          .race-candidate-bottom-sheet .bottom-sheet-icon-actions,
+          .race-map-bottom-sheet .bottom-sheet-icon-actions,
+          .race-custom-bottom-sheet .bottom-sheet-icon-actions,
+          .race-draw-bottom-sheet .bottom-sheet-icon-actions {
+            top: 5px !important;
+            right: 10px !important;
+          }
+
+          .race-custom-bottom-sheet .custom-bottom-sheet-body {
+            padding-bottom: max(86px, calc(env(safe-area-inset-bottom) + 86px)) !important;
+          }
+        }
+
       `}</style>
 
     </div>
