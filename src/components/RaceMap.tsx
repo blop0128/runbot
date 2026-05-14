@@ -2897,11 +2897,13 @@ function calculateRouteQualityScore(
   const shortSegmentPenaltyM = calculateShortSegmentPenaltyM(candidate.polyline);
   const tolerancePenaltyM = candidate.isWithinTolerance ? 0 : 850;
   const distanceErrorPenaltyM = candidate.distanceErrorM * 0.22;
-  const hasTrafficSignalData =
+  const readyTrafficSignalCount =
     externalData?.trafficSignalStatus === "ready" &&
-    typeof externalData.trafficSignalCount === "number";
-  const trafficSignalPenaltyM = hasTrafficSignalData
-    ? externalData.trafficSignalCount * 185
+    typeof externalData.trafficSignalCount === "number"
+      ? externalData.trafficSignalCount
+      : null;
+  const trafficSignalPenaltyM = readyTrafficSignalCount !== null
+    ? readyTrafficSignalCount * 185
     : 0;
   const roadClassPenaltyM =
     typeof externalData?.roadClassScore === "number"
