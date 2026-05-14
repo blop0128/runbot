@@ -6272,6 +6272,88 @@ export default function RaceMap() {
     setStatus("테스트 저장 데이터를 초기화했습니다.");
   }
 
+
+  const targetDistancePresets = [
+    { label: "3", value: "3.0" },
+    { label: "5", value: "5.0" },
+    { label: "10", value: "10.0" },
+  ];
+
+  const isPresetTargetDistance = targetDistancePresets.some(
+    (preset) => preset.value === autoLoopTargetKm
+  );
+
+  function handleDirectTargetDistanceFocus() {
+    hideTargetDistanceHint();
+
+    if (isPresetTargetDistance) {
+      setAutoLoopTargetKm("");
+    }
+  }
+
+  function renderInlineTargetDistanceSelector(disabled: boolean) {
+    return (
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-[11px] font-semibold text-slate-500">
+            목표 거리
+          </div>
+          <div className="text-[10px] font-bold text-slate-400">km</div>
+        </div>
+
+        <div className="distance-inline-selector">
+          {targetDistancePresets.map((preset) => {
+            const isActive = autoLoopTargetKm === preset.value;
+
+            return (
+              <button
+                key={preset.value}
+                type="button"
+                onClick={() => {
+                  setAutoLoopTargetKm(preset.value);
+                  hideTargetDistanceHint();
+                }}
+                disabled={disabled}
+                className={`distance-preset-button distance-inline-preset rounded-lg text-xs font-black transition disabled:cursor-not-allowed ${
+                  isActive ? "liquid-selected-control" : "liquid-clear-control"
+                }`}
+                aria-label={`${preset.label}km 선택`}
+              >
+                {preset.label}
+              </button>
+            );
+          })}
+
+          <div className="target-distance-inline-input-wrap">
+            <input
+              value={isPresetTargetDistance ? "" : autoLoopTargetKm}
+              onChange={(event) => {
+                setAutoLoopTargetKm(event.target.value);
+                hideTargetDistanceHint();
+              }}
+              onFocus={handleDirectTargetDistanceFocus}
+              disabled={disabled}
+              inputMode="decimal"
+              placeholder="직접입력"
+              className="target-distance-inline-input"
+            />
+            <span className="target-distance-inline-unit">km</span>
+
+            {isTargetDistanceHintVisible && (
+              <button
+                type="button"
+                onClick={hideTargetDistanceHint}
+                className="target-distance-popover target-distance-popover-inline"
+              >
+                거리를 올바르게 입력해주십시오.
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   function renderRunRecordCard(record: RunRecord) {
     return (
       <div
@@ -6664,7 +6746,10 @@ export default function RaceMap() {
 
         <button
           type="button"
-          onClick={() => setActivePanel("map")}
+          onClick={() => {
+            setActivePanel("map");
+            setIsLeaderboardOpen(true);
+          }}
           className={`race-tab-button ${
             activePanel === "map" ? "race-tab-active" : ""
           }`}
@@ -6978,65 +7063,9 @@ export default function RaceMap() {
                     현재 위치 기준 코스 생성
                   </div>
 
-                  <div className="space-y-2">
-                    <div className="text-[11px] font-medium text-slate-500">
-                      목표 거리 km
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-2">
-                      {[
-                        { label: "3K", value: "3.0" },
-                        { label: "5K", value: "5.0" },
-                        { label: "10K", value: "10.0" },
-                      ].map((preset) => {
-                        const isActive = autoLoopTargetKm === preset.value;
-
-                        return (
-                          <button
-                            key={preset.value}
-                            type="button"
-                            onClick={() => {
-                              setAutoLoopTargetKm(preset.value);
-                              hideTargetDistanceHint();
-                            }}
-                            disabled={isRunning || isGeneratingAnyCourse}
-                            className={`distance-preset-button rounded-lg px-3 py-2 text-xs font-black transition disabled:cursor-not-allowed ${
-                              isActive
-                                ? "liquid-selected-control"
-                                : "liquid-clear-control"
-                            }`}
-                          >
-                            {preset.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    <div className="relative">
-                      <input
-                        value={autoLoopTargetKm}
-                        onChange={(event) => {
-                          setAutoLoopTargetKm(event.target.value);
-                          hideTargetDistanceHint();
-                        }}
-                        onFocus={hideTargetDistanceHint}
-                        disabled={isRunning || isGeneratingAnyCourse}
-                        inputMode="decimal"
-                        className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 disabled:bg-slate-100"
-                      />
-
-                      {isTargetDistanceHintVisible && (
-                        <button
-                          type="button"
-                          onClick={hideTargetDistanceHint}
-                          className="target-distance-popover"
-                        >
-                          거리를 올바르게 입력해주십시오.
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
+                  {renderInlineTargetDistanceSelector(
+                    isRunning || isGeneratingAnyCourse
+                  )}
                   <div className="mt-2 grid grid-cols-1 gap-2">
                     <button
                       type="button"
@@ -8046,6 +8075,72 @@ export default function RaceMap() {
                     {playerRank <= 1 ? "Lead" : `${gapToAhead.toFixed(0)}m`}
                   </div>
                 </div>
+              </div>
+
+
+              <div className="map-quick-course-panel mt-3 rounded-2xl border border-white/50 bg-white/35 p-2.5">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="text-xs font-black text-slate-900">
+                    지도에서 바로 코스 찾기
+                  </div>
+                  <div className="text-[10px] font-bold text-slate-500">
+                    현재 위치 기준
+                  </div>
+                </div>
+
+                {renderInlineTargetDistanceSelector(
+                  isRunning || isGeneratingAnyCourse
+                )}
+
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={handleGenerateOutAndBackCandidates}
+                    disabled={isGeneratedCourseControlsDisabled}
+                    className="course-action-button course-action-primary px-3 py-2 text-xs disabled:cursor-not-allowed"
+                  >
+                    {isGeneratingAutoLoop ? "왕복 찾는 중..." : "왕복"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleGenerateOneWayCandidates}
+                    disabled={isGeneratedCourseControlsDisabled}
+                    className="course-action-button course-action-primary px-3 py-2 text-xs disabled:cursor-not-allowed"
+                  >
+                    {isGeneratingOneWay ? "편도 찾는 중..." : "편도"}
+                  </button>
+                </div>
+
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={handleStartCustomCourseMode}
+                    disabled={isCustomCourseStartDisabled}
+                    className="course-action-button course-action-primary px-3 py-2 text-xs disabled:cursor-not-allowed"
+                  >
+                    직접 만들기
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleStartDrawRouteMode}
+                    disabled={isDrawRouteStartDisabled}
+                    className="course-action-button course-action-primary px-3 py-2 text-xs disabled:cursor-not-allowed"
+                  >
+                    그려서 찾기
+                  </button>
+                </div>
+
+                {isGeneratingAnyCourse && (
+                  <button
+                    type="button"
+                    onClick={handleStopCourseSearch}
+                    className="course-search-stop-button mt-2 w-full px-3 py-2 text-xs font-black"
+                  >
+                    코스 탐색 중지
+                  </button>
+                )}
               </div>
 
               <div className="mt-2 text-xs text-slate-500">
@@ -10439,6 +10534,98 @@ export default function RaceMap() {
             0 10px 24px rgba(15, 23, 42, 0.055),
             inset 0 1px 0 rgba(255, 255, 255, 0.74),
             inset 0 -1px 0 rgba(255, 255, 255, 0.10) !important;
+        }
+
+
+
+        .distance-inline-selector {
+          display: grid;
+          grid-template-columns: 0.72fr 0.72fr 0.72fr minmax(118px, 1.45fr);
+          gap: 8px;
+          align-items: center;
+        }
+
+        .distance-inline-preset {
+          min-height: 40px;
+          padding: 0 10px;
+        }
+
+        .target-distance-inline-input-wrap {
+          position: relative;
+          min-width: 0;
+        }
+
+        .target-distance-inline-input {
+          width: 100%;
+          min-height: 40px;
+          border-radius: 12px;
+          border: 1px solid rgba(148, 163, 184, 0.34);
+          background: rgba(255, 255, 255, 0.48);
+          padding: 0 34px 0 12px;
+          color: #0f172a;
+          font-size: 12px;
+          font-weight: 800;
+          outline: none;
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.78),
+            0 8px 18px rgba(15, 23, 42, 0.045);
+          backdrop-filter: blur(24px) saturate(165%);
+          -webkit-backdrop-filter: blur(24px) saturate(165%);
+        }
+
+        .target-distance-inline-input:focus {
+          border-color: rgba(15, 23, 42, 0.46);
+          box-shadow:
+            0 0 0 2px rgba(15, 23, 42, 0.08),
+            inset 0 1px 0 rgba(255, 255, 255, 0.80);
+        }
+
+        .target-distance-inline-input:disabled {
+          cursor: not-allowed;
+          color: rgba(100, 116, 139, 0.56);
+          background: rgba(255, 255, 255, 0.20);
+        }
+
+        .target-distance-inline-unit {
+          position: absolute;
+          top: 50%;
+          right: 10px;
+          transform: translateY(-50%);
+          color: rgba(100, 116, 139, 0.82);
+          font-size: 11px;
+          font-weight: 900;
+          pointer-events: none;
+        }
+
+        .target-distance-popover-inline {
+          right: 0;
+          left: auto;
+          top: calc(100% + 8px);
+          z-index: 120;
+          white-space: nowrap;
+        }
+
+        .map-quick-course-panel .distance-inline-selector {
+          grid-template-columns: 0.66fr 0.66fr 0.66fr minmax(104px, 1.55fr);
+          gap: 6px;
+        }
+
+        @media (max-width: 420px) {
+          .distance-inline-selector {
+            grid-template-columns: 0.64fr 0.64fr 0.64fr minmax(100px, 1.6fr);
+            gap: 6px;
+          }
+
+          .distance-inline-preset,
+          .target-distance-inline-input {
+            min-height: 38px;
+          }
+
+          .target-distance-inline-input {
+            padding-left: 10px;
+            padding-right: 30px;
+            font-size: 11px;
+          }
         }
 
         .race-root-setup .distance-preset-button,
